@@ -41,13 +41,16 @@ const LOCATION_NAMES = {
 
 const LOCATION_KEYWORDS = {
   'ie_segovia': ['segovia', 'ie segovia'],
-  'ie_madrid_tower': ['tower', 'ie madrid', 'ie tower', 'madrid tower', 'data_driven', 'data driven', 'prov'],
+  'ie_madrid_tower': ['tower', 'ie madrid', 'ie tower', 'madrid tower', 'data_driven', 'data driven', 'caleido', 'torre caleido'],
   'eae_joaquin_costa': ['eae', 'joaquin costa', 'joaquín costa', 'mamgc', 'máster en marketing', 'marketing y gestión', 'marketing y gestion', 'ft-es-a'],
   'ufv': ['ufv', 'villanueva', 'francisco vitoria', 'aib', 'aib1', 'ciencia de datos', 'fundamentos de ciencia', 'big data'],
   'ceu': ['ceu', 'san pablo'],
   'slu': ['slu', 'saint louis', 'san luis', 'btm', 'btm?2500', 'btm 2500'],
-  'uc3m': ['uc3m', 'uc3', 'getafe', 'carlos iii', 'carlos III']
+  'uc3m': ['uc3m', 'uc3', 'getafe', 'carlos iii', 'carlos III', 'tutoria']
 };
+
+// Ubicaciones facturables (solo IE y EAE)
+const BILLABLE_LOCATIONS = ['ie_segovia', 'ie_madrid_tower', 'eae_joaquin_costa'];
 
 const MONTHS = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 
@@ -261,45 +264,57 @@ export default function App() {
       const eventDate = new Date(event.start);
       const dateStr = eventDate.toDateString();
       
+      // Determinar origen: si es el mismo día, desde ubicación anterior; si no, desde casa
       let origin = 'casa';
       if (previousDate && previousDate.toDateString() === dateStr) {
         origin = previousLocation;
       }
       
-      const distanceToDestination = DISTANCES[origin]?.[destination] || 0;
+      // Solo crear viaje facturable si el destino es IE o EAE
+      const isBillable = BILLABLE_LOCATIONS.includes(destination);
       
-      calculatedTrips.push({
-        id: `${event.id}-ida`,
-        date: eventDate,
-        month: eventDate.getMonth(),
-        year: eventDate.getFullYear(),
-        origin,
-        destination,
-        distance: distanceToDestination,
-        type: 'ida',
-        event: event.title,
-        amount: distanceToDestination * CONFIG.RATE_PER_KM
-      });
+      if (isBillable) {
+        const distanceToDestination = DISTANCES[origin]?.[destination] || 0;
+        
+        calculatedTrips.push({
+          id: `${event.id}-ida`,
+          date: eventDate,
+          month: eventDate.getMonth(),
+          year: eventDate.getFullYear(),
+          origin,
+          destination,
+          distance: distanceToDestination,
+          type: 'ida',
+          event: event.title,
+          amount: distanceToDestination * CONFIG.RATE_PER_KM,
+          billable: true
+        });
+      }
 
       const nextEvent = allEvents[i + 1];
       const hasMoreEventsToday = nextEvent && new Date(nextEvent.start).toDateString() === dateStr;
       
       if (!hasMoreEventsToday) {
-        const distanceBack = DISTANCES[destination]?.['casa'] || 0;
-        calculatedTrips.push({
-          id: `${event.id}-vuelta`,
-          date: eventDate,
-          month: eventDate.getMonth(),
-          year: eventDate.getFullYear(),
-          origin: destination,
-          destination: 'casa',
-          distance: distanceBack,
-          type: 'vuelta',
-          event: event.title,
-          amount: distanceBack * CONFIG.RATE_PER_KM
-        });
+        // Vuelta a casa - solo facturable si venimos de IE o EAE
+        if (isBillable) {
+          const distanceBack = DISTANCES[destination]?.['casa'] || 0;
+          calculatedTrips.push({
+            id: `${event.id}-vuelta`,
+            date: eventDate,
+            month: eventDate.getMonth(),
+            year: eventDate.getFullYear(),
+            origin: destination,
+            destination: 'casa',
+            distance: distanceBack,
+            type: 'vuelta',
+            event: event.title,
+            amount: distanceBack * CONFIG.RATE_PER_KM,
+            billable: true
+          });
+        }
         previousLocation = 'casa';
       } else {
+        // Hay más eventos hoy, actualizar ubicación anterior
         previousLocation = destination;
       }
       
@@ -307,7 +322,7 @@ export default function App() {
     }
     
     setTrips(calculatedTrips);
-    setStatusMessage(`✅ ${calculatedTrips.length} viajes calculados`);
+    setStatusMessage(`✅ ${calculatedTrips.length} viajes facturables (IE/EAE) calculados`);
     return calculatedTrips;
   }, [calendarEvents, manualEvents]);
 

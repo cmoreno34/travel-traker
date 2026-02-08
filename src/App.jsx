@@ -18,13 +18,14 @@ const CONFIG = {
 // DISTANCIAS ENTRE UBICACIONES (km)
 // ============================================
 const DISTANCES = {
-  'casa': { 'ie_segovia': 95, 'ie_madrid_tower': 12, 'eae_joaquin_costa': 8, 'ufv': 25, 'ceu': 18, 'slu': 15, 'casa': 0 },
-  'ie_segovia': { 'casa': 95, 'ie_madrid_tower': 90, 'eae_joaquin_costa': 92, 'ufv': 85, 'ceu': 88, 'slu': 90, 'ie_segovia': 0 },
-  'ie_madrid_tower': { 'casa': 12, 'ie_segovia': 90, 'eae_joaquin_costa': 5, 'ufv': 20, 'ceu': 15, 'slu': 12, 'ie_madrid_tower': 0 },
-  'eae_joaquin_costa': { 'casa': 8, 'ie_segovia': 92, 'ie_madrid_tower': 5, 'ufv': 22, 'ceu': 14, 'slu': 10, 'eae_joaquin_costa': 0 },
-  'ufv': { 'casa': 25, 'ie_segovia': 85, 'ie_madrid_tower': 20, 'eae_joaquin_costa': 22, 'ceu': 12, 'slu': 18, 'ufv': 0 },
-  'ceu': { 'casa': 18, 'ie_segovia': 88, 'ie_madrid_tower': 15, 'eae_joaquin_costa': 14, 'ufv': 12, 'slu': 8, 'ceu': 0 },
-  'slu': { 'casa': 15, 'ie_segovia': 90, 'ie_madrid_tower': 12, 'eae_joaquin_costa': 10, 'ufv': 18, 'ceu': 8, 'slu': 0 }
+  'casa': { 'ie_segovia': 95, 'ie_madrid_tower': 12, 'eae_joaquin_costa': 8, 'ufv': 25, 'ceu': 18, 'slu': 15, 'uc3m': 22, 'casa': 0 },
+  'ie_segovia': { 'casa': 95, 'ie_madrid_tower': 90, 'eae_joaquin_costa': 92, 'ufv': 85, 'ceu': 88, 'slu': 90, 'uc3m': 95, 'ie_segovia': 0 },
+  'ie_madrid_tower': { 'casa': 12, 'ie_segovia': 90, 'eae_joaquin_costa': 5, 'ufv': 20, 'ceu': 15, 'slu': 12, 'uc3m': 18, 'ie_madrid_tower': 0 },
+  'eae_joaquin_costa': { 'casa': 8, 'ie_segovia': 92, 'ie_madrid_tower': 5, 'ufv': 22, 'ceu': 14, 'slu': 10, 'uc3m': 16, 'eae_joaquin_costa': 0 },
+  'ufv': { 'casa': 25, 'ie_segovia': 85, 'ie_madrid_tower': 20, 'eae_joaquin_costa': 22, 'ceu': 12, 'slu': 18, 'uc3m': 30, 'ufv': 0 },
+  'ceu': { 'casa': 18, 'ie_segovia': 88, 'ie_madrid_tower': 15, 'eae_joaquin_costa': 14, 'ufv': 12, 'slu': 8, 'uc3m': 25, 'ceu': 0 },
+  'slu': { 'casa': 15, 'ie_segovia': 90, 'ie_madrid_tower': 12, 'eae_joaquin_costa': 10, 'ufv': 18, 'ceu': 8, 'uc3m': 20, 'slu': 0 },
+  'uc3m': { 'casa': 22, 'ie_segovia': 95, 'ie_madrid_tower': 18, 'eae_joaquin_costa': 16, 'ufv': 30, 'ceu': 25, 'slu': 20, 'uc3m': 0 }
 };
 
 const LOCATION_NAMES = {
@@ -34,16 +35,18 @@ const LOCATION_NAMES = {
   'eae_joaquin_costa': 'EAE Joaquín Costa',
   'ufv': 'UFV',
   'ceu': 'CEU',
-  'slu': 'SLU'
+  'slu': 'SLU',
+  'uc3m': 'UC3M (Getafe)'
 };
 
 const LOCATION_KEYWORDS = {
   'ie_segovia': ['segovia', 'ie segovia'],
-  'ie_madrid_tower': ['tower', 'ie madrid', 'ie tower', 'madrid tower'],
-  'eae_joaquin_costa': ['eae', 'joaquin costa', 'joaquín costa'],
-  'ufv': ['ufv', 'villanueva', 'francisco vitoria'],
+  'ie_madrid_tower': ['tower', 'ie madrid', 'ie tower', 'madrid tower', 'data_driven', 'data driven', 'prov'],
+  'eae_joaquin_costa': ['eae', 'joaquin costa', 'joaquín costa', 'mamgc', 'máster en marketing', 'marketing y gestión', 'marketing y gestion', 'ft-es-a'],
+  'ufv': ['ufv', 'villanueva', 'francisco vitoria', 'aib', 'aib1', 'ciencia de datos', 'fundamentos de ciencia', 'big data'],
   'ceu': ['ceu', 'san pablo'],
-  'slu': ['slu', 'saint louis', 'san luis']
+  'slu': ['slu', 'saint louis', 'san luis', 'btm', 'btm?2500', 'btm 2500'],
+  'uc3m': ['uc3m', 'uc3', 'getafe', 'carlos iii', 'carlos III']
 };
 
 const MONTHS = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];

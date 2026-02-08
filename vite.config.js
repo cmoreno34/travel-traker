@@ -1,10 +1,9 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// Configurado para cmoreno34
 export default defineConfig({
   plugins: [react()],
-  base: '/travel-tracker/',
+  base: '/travel-traker/',
   server: {
     port: 5173
   }

@@ -39,15 +39,32 @@ const LOCATION_NAMES = {
   'uc3m': 'UC3M (Getafe)'
 };
 
+// IMPORTANTE: el orden importa. Las claves más específicas deben ir antes
+// que las genéricas (p.ej. ie_segovia antes de ie_madrid_tower) para que
+// "IE Segovia Business School" no caiga en Madrid Tower.
 const LOCATION_KEYWORDS = {
-  'ie_segovia': ['segovia', 'ie segovia'],
-  'ie_madrid_tower': ['tower', 'ie madrid', 'ie tower', 'madrid tower', 'data_driven', 'data driven', 'caleido', 'torre caleido'],
-  'eae_joaquin_costa': ['eae', 'joaquin costa', 'joaquín costa', 'mamgc', 'máster en marketing', 'marketing y gestión', 'marketing y gestion', 'ft-es-a'],
+  'ie_segovia': ['segovia', 'ie segovia', 'campus segovia'],
+  'ie_madrid_tower': [
+    'tower', 'ie madrid', 'ie tower', 'madrid tower',
+    'data_driven', 'data driven', 'caleido', 'torre caleido',
+    // Genérico IE (cualquier sesión IE que no sea Segovia)
+    'ie business school', 'ie business', 'ie university',
+    'instituto de empresa', 'ie school',
+  ],
+  'eae_joaquin_costa': [
+    'eae', 'joaquin costa', 'mamgc',
+    'master en marketing', 'marketing y gestion', 'ft-es-a',
+    'eae business school', 'eae business', 'eae madrid',
+  ],
   'ufv': ['ufv', 'villanueva', 'francisco vitoria', 'aib', 'aib1', 'ciencia de datos', 'fundamentos de ciencia', 'big data'],
   'ceu': ['ceu', 'san pablo'],
   'slu': ['slu', 'saint louis', 'san luis', 'btm', 'btm?2500', 'btm 2500'],
-  'uc3m': ['uc3m', 'uc3', 'getafe', 'carlos iii', 'carlos III', 'tutoria']
+  'uc3m': ['uc3m', 'uc3', 'getafe', 'carlos iii', 'tutoria']
 };
+
+// Normalizar texto: minúsculas + sin acentos
+const normalize = (s) => (s || '').toString().toLowerCase()
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
 // Ubicaciones facturables (solo IE y EAE)
 const BILLABLE_LOCATIONS = ['ie_segovia', 'ie_madrid_tower', 'eae_joaquin_costa'];
@@ -83,12 +100,18 @@ export default function App() {
   const [manualEvents, setManualEvents] = useState([]);
   const [showManualEntry, setShowManualEntry] = useState(false);
 
-  const detectLocation = useCallback((text) => {
-    if (!text) return null;
-    const lowerText = text.toLowerCase();
+  // Detecta la ubicación buscando keywords en título, descripción y location
+  // del evento. Normaliza acentos para que "joaquín"/"joaquin" sean equivalentes.
+  const detectLocation = useCallback((event) => {
+    if (!event) return null;
+    const haystack = [event.summary, event.description, event.location, event.title]
+      .map(normalize)
+      .filter(Boolean)
+      .join(' \n ');
+    if (!haystack) return null;
     for (const [locationKey, keywords] of Object.entries(LOCATION_KEYWORDS)) {
       for (const keyword of keywords) {
-        if (lowerText.includes(keyword)) return locationKey;
+        if (haystack.includes(normalize(keyword))) return locationKey;
       }
     }
     return null;
@@ -165,59 +188,115 @@ export default function App() {
       setStatusMessage('❌ No hay conexión con Google Calendar');
       return;
     }
-    
+
     setIsLoading(true);
-    setStatusMessage('📡 Obteniendo eventos del calendario...');
-    
+    setStatusMessage('📡 Obteniendo eventos de todos tus calendarios...');
+
     const startDate = new Date(selectedYear, 0, 1);
-    const endDate = new Date(selectedYear, 11, 31);
-    
+    const endDate = new Date(selectedYear, 11, 31, 23, 59, 59);
+    const authHeader = { Authorization: `Bearer ${accessToken}` };
+
     try {
-      const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?` +
-        `timeMin=${startDate.toISOString()}&` +
-        `timeMax=${endDate.toISOString()}&` +
-        `singleEvents=true&orderBy=startTime&maxResults=2500`;
-      
-      const response = await fetch(url, {
-        headers: { Authorization: `Bearer ${accessToken}` }
-      });
-      
-      const data = await response.json();
-      
-      if (data.error) {
-        setStatusMessage(`❌ Error: ${data.error.message}`);
-        if (data.error.code === 401) {
+      // 1) Listar todos los calendarios del usuario (no solo "primary")
+      const calListResp = await fetch(
+        'https://www.googleapis.com/calendar/v3/users/me/calendarList',
+        { headers: authHeader }
+      );
+      const calListData = await calListResp.json();
+      if (calListData.error) {
+        setStatusMessage(`❌ Error: ${calListData.error.message}`);
+        if (calListData.error.code === 401) {
           setIsAuthenticated(false);
           setAccessToken(null);
         }
         setIsLoading(false);
         return;
       }
-      
-      if (data.items && data.items.length > 0) {
-        const allEvents = data.items.map(event => ({
-          id: event.id,
-          title: event.summary || 'Sin título',
-          start: new Date(event.start.dateTime || event.start.date),
-          location: detectLocation(event.summary) || detectLocation(event.location),
-          originalLocation: event.location
-        }));
-        
-        const relevantEvents = allEvents.filter(event => event.location !== null);
-        
-        setCalendarEvents(relevantEvents);
-        setStatusMessage(`✅ ${relevantEvents.length} eventos relevantes de ${data.items.length} totales`);
-        
-        if (relevantEvents.length === 0) {
-          setStatusMessage(`⚠️ Ningún evento coincide con IE/EAE/UFV/CEU/SLU. Primeros: ${allEvents.slice(0, 3).map(e => e.title).join(', ')}`);
+
+      const calendars = (calListData.items || []).filter(c => !c.hidden);
+
+      // 2) Pedir eventos de cada calendario en paralelo, paginando
+      const fetchAllPages = async (calendarId) => {
+        const out = [];
+        let pageToken;
+        do {
+          const params = new URLSearchParams({
+            timeMin: startDate.toISOString(),
+            timeMax: endDate.toISOString(),
+            singleEvents: 'true',
+            orderBy: 'startTime',
+            maxResults: '2500',
+          });
+          if (pageToken) params.set('pageToken', pageToken);
+          const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params.toString()}`;
+          const resp = await fetch(url, { headers: authHeader });
+          const data = await resp.json();
+          if (data.error) {
+            console.warn(`Calendario ${calendarId}: ${data.error.message}`);
+            return out;
+          }
+          if (data.items) out.push(...data.items);
+          pageToken = data.nextPageToken;
+        } while (pageToken);
+        return out;
+      };
+
+      const results = await Promise.all(
+        calendars.map(c => fetchAllPages(c.id).then(items => ({ cal: c, items })))
+      );
+
+      // 3) Consolidar y deduplicar (evento puede aparecer en varios calendarios)
+      const seen = new Set();
+      const allRaw = [];
+      for (const { cal, items } of results) {
+        for (const ev of items) {
+          const key = ev.iCalUID || ev.id;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          allRaw.push({ ...ev, _calendarName: cal.summary });
         }
-      } else {
-        setStatusMessage('⚠️ No se encontraron eventos en ' + selectedYear);
       }
+
+      if (allRaw.length === 0) {
+        setStatusMessage(`⚠️ No se encontraron eventos en ${selectedYear}`);
+        setIsLoading(false);
+        return;
+      }
+
+      // 4) Detectar ubicación con título + descripción + location
+      const allEvents = allRaw.map(event => ({
+        id: event.id,
+        title: event.summary || 'Sin título',
+        description: event.description || '',
+        start: new Date(event.start.dateTime || event.start.date),
+        location: detectLocation(event),
+        originalLocation: event.location,
+        calendar: event._calendarName,
+      }));
+
+      const relevantEvents = allEvents.filter(e => e.location !== null);
+
+      // 5) Diagnóstico: eventos que mencionan IE/EAE/business pero no se han mapeado
+      const suspectRe = /\b(ie|eae|business school|instituto de empresa)\b/;
+      const missed = allEvents.filter(e => {
+        if (e.location) return false;
+        const text = normalize(`${e.title} ${e.description} ${e.originalLocation || ''}`);
+        return suspectRe.test(text);
+      });
+
+      setCalendarEvents(relevantEvents);
+
+      let msg = `✅ ${relevantEvents.length} eventos relevantes de ${allEvents.length} totales (${calendars.length} calendarios)`;
+      if (missed.length > 0) {
+        const sample = missed.slice(0, 3).map(e => `"${e.title}"`).join(', ');
+        msg += ` · ⚠️ ${missed.length} posibles IE/EAE no mapeados: ${sample}`;
+        console.warn('Eventos sospechosos no mapeados:', missed);
+      }
+      setStatusMessage(msg);
     } catch (error) {
       setStatusMessage(`❌ Error de conexión: ${error.message}`);
     }
-    
+
     setIsLoading(false);
   }, [accessToken, selectedYear, detectLocation]);
 

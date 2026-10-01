@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   LOCATION_NAMES, BILLABLE_LOCATIONS, detectLocation, isSuspectUnmapped,
-  parseEventDate, eventKey, isDeclined, buildTrips, buildMonthlyReports
+  parseEventDate, eventKey, isDeclined, buildTrips, buildMonthlyReports,
+  titleKey, applyRules, pendingGroups
 } from './trips.js';
 
 // ============================================
@@ -44,6 +45,14 @@ const loadStored = (key, dateField) => {
   }
 };
 
+// Opciones de los desplegables de sitio
+const PLACE_OPTIONS = (
+  <>
+    {Object.entries(LOCATION_NAMES).filter(([k]) => k !== 'casa').map(([k, n]) => <option key={k} value={k}>{n}</option>)}
+    <option value="none">No es un viaje</option>
+  </>
+);
+
 const shortName = (loc) => loc === 'casa' ? 'Casa' : LOCATION_NAMES[loc];
 
 // URL de redirección OAuth: raíz de la app en GitHub Pages (base de Vite),
@@ -52,8 +61,10 @@ const getRedirectUri = () => window.location.origin + import.meta.env.BASE_URL;
 
 export default function App() {
   const [invoices, setInvoices] = useState(() => loadStored('travel_invoices'));
-  const [calendarEvents, setCalendarEvents] = useState(() => loadStored('travel_events', 'start'));
-  const [trips, setTrips] = useState(() => loadStored('travel_trips', 'date'));
+  // Todos los eventos importados (con su ubicación detectada automáticamente).
+  // Los guardados por versiones anteriores solo tenían "location".
+  const [importedEvents, setImportedEvents] = useState(() => loadStored('travel_events', 'start')
+    .map(e => ('autoLocation' in e ? e : { ...e, autoLocation: e.location })));
   const [selectedMonth, setSelectedMonth] = useState(null);
   const [selectedYear, setSelectedYear] = useState(() => Number(localStorage.getItem('travel_year')) || CONFIG.DEFAULT_YEAR);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -62,15 +73,15 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [manualEvents, setManualEvents] = useState(() => loadStored('travel_manual', 'start'));
-  const [missedEvents, setMissedEvents] = useState(() => loadStored('travel_review', 'start'));
-  // Sitio elegido a mano por evento (clave eventKey → ubicación o 'none')
-  const [locationOverrides, setLocationOverrides] = useState(() => {
+  // Lo aprendido: título normalizado → ubicación o 'none' (no es un viaje)
+  const [rules, setRules] = useState(() => {
     try {
-      return JSON.parse(localStorage.getItem('travel_overrides') || '{}');
+      return JSON.parse(localStorage.getItem('travel_rules') || '{}');
     } catch {
       return {};
     }
   });
+  const [showAllPending, setShowAllPending] = useState(false);
   const [showManualEntry, setShowManualEntry] = useState(false);
 
   // Cargar token de URL al iniciar (OAuth redirect)
@@ -96,38 +107,50 @@ export default function App() {
   }, [invoices]);
 
   useEffect(() => {
-    localStorage.setItem('travel_trips', JSON.stringify(trips));
-  }, [trips]);
-
-  useEffect(() => {
-    localStorage.setItem('travel_events', JSON.stringify(calendarEvents));
-  }, [calendarEvents]);
+    localStorage.setItem('travel_events', JSON.stringify(importedEvents));
+  }, [importedEvents]);
 
   useEffect(() => {
     localStorage.setItem('travel_manual', JSON.stringify(manualEvents));
   }, [manualEvents]);
 
   useEffect(() => {
-    localStorage.setItem('travel_review', JSON.stringify(missedEvents));
-  }, [missedEvents]);
-
-  useEffect(() => {
-    localStorage.setItem('travel_overrides', JSON.stringify(locationOverrides));
-  }, [locationOverrides]);
+    localStorage.setItem('travel_rules', JSON.stringify(rules));
+  }, [rules]);
 
   useEffect(() => {
     localStorage.setItem('travel_year', String(selectedYear));
   }, [selectedYear]);
 
-  const yearEvents = useMemo(
-    () => calendarEvents.filter(e => new Date(e.start).getFullYear() === selectedYear),
-    [calendarEvents, selectedYear]
+  const inYear = useCallback((e) => new Date(e.start).getFullYear() === selectedYear, [selectedYear]);
+
+  // Eventos con sitio (detectado o aprendido); de aquí salen los viajes
+  const calendarEvents = useMemo(
+    () => applyRules(importedEvents, rules).filter(e => e.location),
+    [importedEvents, rules]
   );
-  const yearReview = useMemo(
-    () => missedEvents
-      .filter(e => new Date(e.start).getFullYear() === selectedYear)
-      .sort((a, b) => new Date(a.start) - new Date(b.start)),
-    [missedEvents, selectedYear]
+  const yearEvents = useMemo(
+    () => calendarEvents.filter(inYear).sort((a, b) => new Date(a.start) - new Date(b.start)),
+    [calendarEvents, inYear]
+  );
+  const yearPending = useMemo(
+    () => pendingGroups(importedEvents.filter(inYear), rules),
+    [importedEvents, rules, inYear]
+  );
+  // Por defecto solo se pregunta por lo que parece IE/EAE o se repite
+  const shownPending = showAllPending ? yearPending : yearPending.filter(g => g.suspect || g.count > 1);
+  // Título a mostrar y nº de eventos de cada regla aprendida
+  const learned = useMemo(() => Object.entries(rules).map(([key, value]) => {
+    const matching = importedEvents.filter(e => titleKey(e.title) === key);
+    return { key, value, title: matching[0]?.title || key, count: matching.filter(inYear).length };
+  }).sort((a, b) => b.count - a.count || a.title.localeCompare(b.title)), [rules, importedEvents, inYear]);
+  // Eventos importados con la versión anterior (sin clave): falta reimportar
+  const needsReimport = yearEvents.some(e => !e.key);
+
+  // Los viajes se recalculan solos al importar, aprender o añadir viajes manuales
+  const trips = useMemo(
+    () => buildTrips([...calendarEvents, ...manualEvents], CONFIG.RATE_PER_KM),
+    [calendarEvents, manualEvents]
   );
   const yearTrips = useMemo(() => trips.filter(t => t.year === selectedYear), [trips, selectedYear]);
   const visibleTrips = selectedMonth !== null ? yearTrips.filter(t => t.month === selectedMonth) : yearTrips;
@@ -228,67 +251,53 @@ export default function App() {
         }
       }
 
-      // 4) Detectar ubicación con título + descripción + location;
-      //    si el usuario la eligió a mano, manda su elección
-      const allEvents = allRaw.map(event => {
-        const key = eventKey(event);
+      // 4) Detectar ubicación con título + descripción + location. Se guardan
+      //    todos los eventos del año para poder preguntar por los que no tienen sitio
+      const imported = allRaw.map(event => {
         const autoLocation = detectLocation(event);
-        const override = locationOverrides[key];
+        const title = event.summary || 'Sin título';
         return {
           id: event.id,
-          key,
-          title: event.summary || 'Sin título',
-          description: event.description || '',
+          key: eventKey(event),
+          title,
           start: parseEventDate(event.start.dateTime || event.start.date),
-          location: override === 'none' ? null : (override || autoLocation),
           autoLocation,
-          originalLocation: event.location,
+          // Menciona IE/EAE pero no se ha detectado: se pregunta primero
+          suspect: isSuspectUnmapped({ title, description: event.description || '', originalLocation: event.location, location: autoLocation }),
           calendar: event._calendarName,
         };
       }).filter(e => e.start.getFullYear() === selectedYear);
 
-      const relevantEvents = allEvents.filter(e => e.location !== null);
-
-      // 5) Para revisar: mencionan IE/EAE/business pero no se detectan solos
-      const missed = allEvents.filter(e => isSuspectUnmapped({ ...e, location: e.autoLocation }));
-      const pending = missed.filter(e => !locationOverrides[e.key]);
-
       // Reemplazar solo los eventos del año importado; los de otros años se conservan
-      const otherYears = (e) => new Date(e.start).getFullYear() !== selectedYear;
-      setCalendarEvents(prev => [...prev.filter(otherYears), ...relevantEvents]);
-      setMissedEvents(prev => [...prev.filter(otherYears), ...missed]);
+      setImportedEvents(prev => [...prev.filter(e => new Date(e.start).getFullYear() !== selectedYear), ...imported]);
 
-      const billable = relevantEvents.filter(e => BILLABLE_LOCATIONS.includes(e.location)).length;
-      let msg = `✅ ${relevantEvents.length} eventos relevantes (${billable} de IE/EAE) de ${allEvents.length} totales en ${selectedYear} (${calendars.length} calendarios)`;
+      const withPlace = applyRules(imported, rules).filter(e => e.location);
+      const billable = withPlace.filter(e => BILLABLE_LOCATIONS.includes(e.location)).length;
+      const pending = pendingGroups(imported, rules).filter(g => g.suspect || g.count > 1);
+      let msg = `✅ ${withPlace.length} eventos con sitio (${billable} de IE/EAE) de ${imported.length} en ${selectedYear} (${calendars.length} calendarios)`;
       if (failed.length > 0) msg += ` · ❌ No se pudo leer: ${failed.join(', ')}`;
-      if (pending.length > 0) {
-        msg += ` · ⚠️ ${pending.length} posibles IE/EAE sin asignar (revisa la lista)`;
-        console.warn('Eventos sospechosos no mapeados:', pending);
-      }
+      if (pending.length > 0) msg += ` · ❓ ${pending.length} títulos por asignar (abajo)`;
       setStatusMessage(msg);
     } catch (error) {
       setStatusMessage(`❌ Error de conexión: ${error.message}`);
     }
 
     setIsLoading(false);
-  }, [accessToken, selectedYear, locationOverrides]);
+  }, [accessToken, selectedYear, rules]);
 
-  // Asignar a mano el sitio de un evento de la lista de revisión.
-  // value: ubicación, 'none' (no es un viaje) o '' (volver a sin asignar)
-  const assignLocation = useCallback((event, value) => {
-    setLocationOverrides(prev => {
+  // Aprender: asignar un sitio (o 'none') a todos los eventos con ese título.
+  // value '' olvida lo aprendido.
+  const setRule = useCallback((title, value) => {
+    const key = titleKey(title);
+    setRules(prev => {
       const next = { ...prev };
-      if (value) next[event.key] = value;
-      else delete next[event.key];
+      if (value) next[key] = value;
+      else delete next[key];
       return next;
     });
-    setCalendarEvents(prev => {
-      const rest = prev.filter(e => e.key !== event.key);
-      return value && value !== 'none' ? [...rest, { ...event, location: value }] : rest;
-    });
-    setStatusMessage(value && value !== 'none'
-      ? `✅ "${event.title}" → ${LOCATION_NAMES[value]}. Pulsa "Calcular" en Viajes para actualizar`
-      : `✅ "${event.title}" no cuenta como viaje`);
+    setStatusMessage(!value ? `↩️ Olvidado: "${title}"`
+      : value === 'none' ? `✅ Aprendido: "${title}" no es un viaje`
+      : `✅ Aprendido: "${title}" → ${LOCATION_NAMES[value]}`);
   }, []);
 
   const addManualEvent = useCallback((event) => {
@@ -311,26 +320,6 @@ export default function App() {
     setManualEvents(prev => prev.filter(e => e.id !== id));
     setStatusMessage('🗑️ Viaje eliminado');
   }, []);
-
-  const calculateTrips = useCallback(() => {
-    const allEvents = [...calendarEvents, ...manualEvents];
-    
-    if (allEvents.length === 0) {
-      setStatusMessage('⚠️ No hay eventos para calcular viajes');
-      return [];
-    }
-    
-    const calculatedTrips = buildTrips(allEvents, CONFIG.RATE_PER_KM);
-    setTrips(calculatedTrips);
-    const inYear = calculatedTrips.filter(t => t.year === selectedYear).length;
-    setStatusMessage(`✅ ${inYear} viajes facturables (IE/EAE) calculados en ${selectedYear}`);
-    return calculatedTrips;
-  }, [calendarEvents, manualEvents, selectedYear]);
-
-  // Los reportes se derivan de los viajes del año; generar = recalcular viajes
-  const generateMonthlyReports = useCallback(() => {
-    if (calculateTrips().length > 0) setStatusMessage(`✅ Reportes de ${selectedYear} generados`);
-  }, [calculateTrips, selectedYear]);
 
   const exportToCSV = useCallback(() => {
     if (monthlyReports.length === 0) return;
@@ -376,11 +365,9 @@ export default function App() {
   const clearAllData = useCallback(() => {
     if (confirm('¿Seguro que quieres borrar todos los datos?')) {
       setInvoices([]);
-      setCalendarEvents([]);
-      setTrips([]);
+      setImportedEvents([]);
       setManualEvents([]);
-      setMissedEvents([]);
-      setLocationOverrides({});
+      setRules({});
       localStorage.clear();
       setStatusMessage('🗑️ Datos borrados');
     }
@@ -501,71 +488,113 @@ export default function App() {
                   </details>
                 </div>
               ) : (
-                <div className="flex justify-between items-center mb-4 flex-wrap gap-3">
+                <div className="flex justify-between items-center flex-wrap gap-3">
                   <p className="text-emerald-400 font-medium">✅ Conectado</p>
                   <button onClick={fetchCalendarEvents} disabled={isLoading} className="px-4 py-2 bg-cyan-500 rounded-xl font-medium hover:bg-cyan-600 disabled:opacity-50">
                     {isLoading ? '⏳...' : `📥 Importar ${selectedYear}`}
                   </button>
                 </div>
               )}
-
-              {yearEvents.length > 0 && (
-                <div className="overflow-x-auto mt-2">
-                  <p className="text-emerald-400 mb-2 text-sm">✓ {yearEvents.length} eventos guardados de {selectedYear} ({yearEvents.filter(e => BILLABLE_LOCATIONS.includes(e.location)).length} de IE/EAE)</p>
-                  <div className="max-h-96 overflow-y-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="text-left text-slate-400 border-b border-slate-800">
-                          <th className="pb-2">Fecha</th>
-                          <th className="pb-2">Evento</th>
-                          <th className="pb-2">Destino</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {[...yearEvents].sort((a, b) => new Date(a.start) - new Date(b.start)).map((event) => (
-                          <tr key={`${event.id}-${new Date(event.start).getTime()}`} className="border-b border-slate-800/50">
-                            <td className="py-2 font-mono text-xs">{new Date(event.start).toLocaleDateString('es-ES')}</td>
-                            <td className="py-2">{event.title}</td>
-                            <td className="py-2">
-                              <span className={`px-2 py-1 rounded text-xs ${BILLABLE_LOCATIONS.includes(event.location) ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-700 text-slate-400'}`}>{LOCATION_NAMES[event.location]}</span>
-                              {event.key && locationOverrides[event.key] && <span className="ml-1 text-xs text-slate-500" title="Asignado a mano">✋</span>}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
             </div>
 
-            {yearReview.length > 0 && (
+            {needsReimport && (
               <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-6">
-                <h3 className="font-semibold text-amber-400 mb-1">
-                  ⚠️ {yearReview.length} eventos para revisar ({yearReview.filter(e => !locationOverrides[e.key]).length} sin asignar)
-                </h3>
-                <p className="text-sm text-slate-300 mb-3">Parecen de IE/EAE pero no se detectan solos. Elige el sitio de cada uno o "No es un viaje": se recuerda para las próximas importaciones. Después pulsa "Calcular" en Viajes.</p>
-                <div className="space-y-2 max-h-96 overflow-y-auto text-sm">
-                  {yearReview.map((event) => {
-                    const value = locationOverrides[event.key] || '';
-                    return (
-                      <div key={event.key} className="flex items-center gap-3 flex-wrap">
-                        <span className="font-mono text-xs text-slate-400 w-20">{new Date(event.start).toLocaleDateString('es-ES')}</span>
-                        <span className="flex-1 min-w-[10rem]">{event.title}</span>
-                        <select
-                          value={value}
-                          onChange={(e) => assignLocation(event, e.target.value)}
-                          className={`bg-slate-800 border rounded-lg px-2 py-1 text-xs ${value ? 'border-slate-700' : 'border-amber-500/60 text-amber-300'}`}
-                        >
-                          <option value="">— Sin asignar —</option>
-                          {Object.entries(LOCATION_NAMES).filter(([k]) => k !== 'casa').map(([k, n]) => <option key={k} value={k}>{n}</option>)}
-                          <option value="none">No es un viaje</option>
+                <h3 className="font-semibold text-amber-400 mb-1">⚠️ Vuelve a importar {selectedYear}</h3>
+                <p className="text-sm text-slate-300">Estos eventos se importaron con la versión anterior de la app. {isAuthenticated ? `Pulsa "Importar ${selectedYear}"` : 'Pulsa "Conectar con Google" y después "Importar"'} para actualizarlos y que la app te pregunte por los que no reconoce.</p>
+              </div>
+            )}
+
+            {/* Preguntas: títulos sin sitio */}
+            {!needsReimport && importedEvents.some(inYear) && (
+              shownPending.length === 0 ? (
+                <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4">
+                  <p className="text-sm text-emerald-400">✅ Nada {yearPending.length > 0 ? 'importante ' : ''}por asignar en {selectedYear}: todos los eventos tienen sitio o ya sabe que no son viajes.</p>
+                  {yearPending.length > 0 && (
+                    <button onClick={() => setShowAllPending(true)} className="mt-2 text-xs text-slate-400 hover:text-white underline">
+                      Ver {yearPending.length} eventos sueltos sin asignar (médicos, cumpleaños…)
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-6">
+                  <h3 className="font-semibold text-amber-400 mb-1">❓ {shownPending.length} eventos por asignar</h3>
+                  <p className="text-sm text-slate-300 mb-3">¿Dónde fue cada uno? La respuesta vale para todos los eventos con ese título, también los futuros, y no se vuelve a preguntar. Los viajes se recalculan solos.</p>
+                  <div className="space-y-2 max-h-[28rem] overflow-y-auto text-sm">
+                    {shownPending.map((group) => (
+                      <div key={group.titleKey} className="flex items-center gap-3 flex-wrap bg-slate-900/60 rounded-lg px-3 py-2">
+                        <div className="flex-1 min-w-[12rem]">
+                          <p>{group.suspect && <span title="Parece de IE/EAE">⭐ </span>}{group.title}</p>
+                          <p className="text-xs text-slate-400">{group.count > 1 ? `${group.count} eventos · desde ` : ''}{new Date(group.first).toLocaleDateString('es-ES')}</p>
+                        </div>
+                        <select value="" onChange={(e) => setRule(group.title, e.target.value)} className="bg-slate-800 border border-amber-500/60 text-amber-300 rounded-lg px-2 py-1 text-xs">
+                          <option value="">— Elegir —</option>
+                          {PLACE_OPTIONS}
                         </select>
                       </div>
-                    );
-                  })}
+                    ))}
+                  </div>
+                  {yearPending.length > shownPending.length && (
+                    <button onClick={() => setShowAllPending(true)} className="mt-3 text-xs text-slate-400 hover:text-white underline">
+                      Ver también {yearPending.length - shownPending.length} eventos sueltos (médicos, cumpleaños…)
+                    </button>
+                  )}
+                  {showAllPending && (
+                    <button onClick={() => setShowAllPending(false)} className="mt-3 text-xs text-slate-400 hover:text-white underline">
+                      Ocultar eventos sueltos
+                    </button>
+                  )}
+                </div>
+              )
+            )}
+
+            {yearEvents.length > 0 && (
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 overflow-x-auto">
+                <p className="text-emerald-400 mb-1 text-sm">✓ {yearEvents.length} eventos con sitio en {selectedYear} ({yearEvents.filter(e => BILLABLE_LOCATIONS.includes(e.location)).length} de IE/EAE)</p>
+                <p className="text-xs text-slate-400 mb-3">Si alguno está mal, cámbialo: se corrige en todos los eventos con ese título. ✋ = aprendido de ti.</p>
+                <div className="max-h-96 overflow-y-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-slate-400 border-b border-slate-800">
+                        <th className="pb-2">Fecha</th>
+                        <th className="pb-2">Evento</th>
+                        <th className="pb-2">Destino</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {yearEvents.map((event) => (
+                        <tr key={`${event.id}-${new Date(event.start).getTime()}`} className="border-b border-slate-800/50">
+                          <td className="py-2 font-mono text-xs">{new Date(event.start).toLocaleDateString('es-ES')}</td>
+                          <td className="py-2">{event.title}</td>
+                          <td className="py-2 whitespace-nowrap">
+                            <select value={event.location} onChange={(e) => setRule(event.title, e.target.value)} className={`rounded px-2 py-1 text-xs border-0 ${BILLABLE_LOCATIONS.includes(event.location) ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-700 text-slate-300'}`}>
+                              {PLACE_OPTIONS}
+                            </select>
+                            {event.learned && <span className="ml-1 text-xs" title="Aprendido de ti">✋</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
+            )}
+
+            {learned.length > 0 && (
+              <details className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+                <summary className="cursor-pointer font-semibold">🧠 Aprendido ({learned.length})</summary>
+                <p className="text-xs text-slate-400 mt-2 mb-3">Lo que has ido respondiendo. Puedes cambiarlo u olvidarlo (volverá a preguntarte).</p>
+                <div className="space-y-2 text-sm">
+                  {learned.map((rule) => (
+                    <div key={rule.key} className="flex items-center gap-3 flex-wrap">
+                      <span className="flex-1 min-w-[12rem]">{rule.title} <span className="text-xs text-slate-500">({rule.count} en {selectedYear})</span></span>
+                      <select value={rule.value} onChange={(e) => setRule(rule.title, e.target.value)} className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1 text-xs">
+                        {PLACE_OPTIONS}
+                      </select>
+                      <button onClick={() => setRule(rule.title, '')} className="text-xs text-slate-400 hover:text-red-400">Olvidar</button>
+                    </div>
+                  ))}
+                </div>
+              </details>
             )}
 
             {/* Viajes manuales */}
@@ -602,7 +631,6 @@ export default function App() {
             <div className="flex justify-between items-center flex-wrap gap-3">
               <h2 className="text-xl font-bold">🛣️ Viajes</h2>
               <div className="flex gap-2 items-center">
-                <button onClick={calculateTrips} className="px-4 py-2 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-xl font-medium">🔄 Calcular</button>
                 <select value={selectedMonth ?? ''} onChange={(e) => setSelectedMonth(e.target.value === '' ? null : parseInt(e.target.value))} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2">
                   <option value="">Todos</option>
                   {MONTHS.map((m, i) => <option key={i} value={i}>{m}</option>)}
@@ -614,7 +642,7 @@ export default function App() {
             {yearTrips.length === 0 ? (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center">
                 <div className="text-5xl mb-4">🛣️</div>
-                <p className="text-slate-400">Sin viajes en {selectedYear}. Importa eventos y haz clic en "Calcular"</p>
+                <p className="text-slate-400">Sin viajes en {selectedYear}. Importa los eventos en la pestaña 📅</p>
               </div>
             ) : (
               <>
@@ -678,7 +706,6 @@ export default function App() {
             <div className="flex justify-between items-center flex-wrap gap-3">
               <h2 className="text-xl font-bold">📊 Reportes {selectedYear}</h2>
               <div className="flex gap-2">
-                <button onClick={generateMonthlyReports} className="px-4 py-2 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-xl font-medium">📊 Generar</button>
                 {monthlyReports.length > 0 && <button onClick={exportToCSV} className="px-4 py-2 bg-emerald-500 rounded-xl font-medium">📥 CSV</button>}
                 <button onClick={clearAllData} className="px-4 py-2 bg-red-500/20 text-red-400 border border-red-500/30 rounded-xl font-medium">🗑️</button>
               </div>
@@ -687,7 +714,7 @@ export default function App() {
             {monthlyReports.length === 0 ? (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center">
                 <div className="text-5xl mb-4">📊</div>
-                <p className="text-slate-400">Sin viajes en {selectedYear}. Carga facturas, importa eventos y genera reportes</p>
+                <p className="text-slate-400">Sin viajes en {selectedYear}. Carga facturas e importa los eventos en la pestaña 📅</p>
               </div>
             ) : (
               <>

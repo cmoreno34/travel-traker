@@ -23,13 +23,19 @@ export const LOCATION_NAMES = {
   'uc3m': 'UC3M (Getafe)'
 };
 
+// Códigos de grupo de IE University en el título: "BBA/SEP-2026/1.S.A/...".
+// La letra tras el curso indica el campus: S = Segovia, M = Madrid.
+const IE_PROGRAM_CODE = '\\b[a-z]{2,6}\\/(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)-\\d{4}\\/';
+const IE_SEGOVIA_CODE = new RegExp(IE_PROGRAM_CODE + '[^/\\s]*\\.s\\.[a-z]\\b');
+const IE_ANY_CODE = new RegExp(IE_PROGRAM_CODE);
+
 // IMPORTANTE: el orden importa. Las claves más específicas deben ir antes
 // que las genéricas (p.ej. ie_segovia antes de ie_madrid_tower) para que
 // "IE Segovia Business School" no caiga en Madrid Tower.
 // Los textos se buscan como subcadena; las RegExp sirven para siglas cortas
 // que solo deben contar como palabra suelta ("IE" sí, "cliente" no).
 export const LOCATION_KEYWORDS = {
-  'ie_segovia': ['segovia', 'ie segovia', 'campus segovia'],
+  'ie_segovia': ['segovia', 'ie segovia', 'campus segovia', IE_SEGOVIA_CODE],
   'ie_madrid_tower': [
     'tower', 'ie madrid', 'ie tower', 'madrid tower',
     'data_driven', 'data driven', 'caleido', 'torre caleido',
@@ -37,6 +43,7 @@ export const LOCATION_KEYWORDS = {
     'ie business school', 'ie business', 'ie university',
     'instituto de empresa', 'ie school',
     /\bie\b/,
+    IE_ANY_CODE,
     // Revisiones de proyecto final y alumnos de IE
     'final project review', 'ana rull', 'rull orti',
   ],
@@ -47,7 +54,7 @@ export const LOCATION_KEYWORDS = {
   ],
   'ufv': ['ufv', 'villanueva', 'francisco vitoria', 'aib', 'aib1', 'ciencia de datos', 'fundamentos de ciencia', 'big data'],
   'ceu': ['ceu', 'san pablo'],
-  'slu': ['slu', 'saint louis', 'san luis', 'btm', 'btm?2500', 'btm 2500'],
+  'slu': ['slu', 'saint louis', 'san luis', 'btm', 'btm?2500', 'btm 2500', 'bt2500', 'padre rubio'],
   'uc3m': ['uc3m', 'uc3', 'getafe', 'carlos iii', 'tutoria']
 };
 
@@ -64,10 +71,15 @@ const toSearchText = (s) => normalize(s)
   .replace(/<[^>]*>/g, ' ')
   .replace(/https?:\/\/\S+/g, ' ');
 
+// Sesiones asíncronas ("ASYNC_BBA/...", también con la errata "ASYBC"): son
+// online, no hay desplazamiento
+const ONLINE_RE = /\basy[nb]c/;
+
 // Detecta la ubicación buscando keywords en título, descripción y location
 // del evento. Normaliza acentos para que "joaquín"/"joaquin" sean equivalentes.
 export const detectLocation = (event) => {
   if (!event) return null;
+  if (ONLINE_RE.test(normalize(event.summary || event.title))) return null;
   const haystack = [event.summary, event.description, event.location, event.title]
     .map(toSearchText)
     .filter(Boolean)
@@ -191,4 +203,36 @@ export const buildMonthlyReports = (trips, invoices) => {
   }
 
   return Object.values(reports).sort((a, b) => a.year !== b.year ? a.year - b.year : a.month - b.month);
+};
+
+// ============================================
+// APRENDIZAJE: reglas por título
+// ============================================
+// Lo que el usuario asigna se guarda por título normalizado, así se aplica a
+// todas las repeticiones del evento (pasadas y futuras) y no se vuelve a preguntar.
+export const titleKey = (title) => normalize(title).replace(/\s+/g, ' ').trim();
+
+// Ubicación final: lo aprendido manda sobre la detección automática.
+// La regla 'none' significa "no es un viaje".
+export const applyRules = (events, rules) => events.map(e => {
+  const rule = rules[titleKey(e.title)];
+  return { ...e, location: rule === 'none' ? null : (rule || e.autoLocation || null), learned: Boolean(rule) };
+});
+
+// Títulos sin sitio (ni detectado ni aprendido), agrupados para preguntar una
+// sola vez por título. Primero los que parecen IE/EAE y los más repetidos.
+export const pendingGroups = (events, rules) => {
+  const groups = new Map();
+  for (const e of events) {
+    if (e.autoLocation || ONLINE_RE.test(normalize(e.title))) continue;
+    const key = titleKey(e.title);
+    if (rules[key]) continue;
+    const g = groups.get(key) || { titleKey: key, title: e.title, count: 0, first: e.start, suspect: false };
+    g.count += 1;
+    if (new Date(e.start) < new Date(g.first)) g.first = e.start;
+    g.suspect = g.suspect || Boolean(e.suspect);
+    groups.set(key, g);
+  }
+  return [...groups.values()].sort((a, b) =>
+    (b.suspect - a.suspect) || (b.count - a.count) || (new Date(a.first) - new Date(b.first)));
 };

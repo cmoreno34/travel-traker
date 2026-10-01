@@ -36,19 +36,21 @@ Haz clic en "Cargar Ballenoil 2025" para importar tus 11 facturas.
 - Haz clic en "Conectar con Google" y autoriza el acceso
 - Importa los eventos del año (se leen todos tus calendarios). Importar un año
   no borra los eventos ya guardados de otros años
-- Revisa la lista de eventos detectados. Los que parecen de IE/EAE pero no se
-  detectan solos aparecen en "Eventos para revisar": elige su sitio en el
-  desplegable (o "No es un viaje"). La elección se recuerda en las próximas
-  importaciones y se marca con ✋ en la tabla
+- **❓ Eventos por asignar:** la app pregunta por los títulos que no reconoce
+  (primero los que parecen IE/EAE ⭐ y los que se repiten). Elige el sitio o
+  "No es un viaje": la respuesta vale para todos los eventos con ese título,
+  también los futuros, y no se vuelve a preguntar
+- Si un evento tiene el sitio mal, cámbialo en la tabla: la app aprende la corrección
+- **🧠 Aprendido:** lista de lo aprendido, para cambiarlo u olvidarlo
 
 ### 3. Viajes
-- Haz clic en "Calcular" para generar los viajes
+- Se calculan solos al importar o al responder preguntas
 - Filtra por mes si lo necesitas
 - Cada día se calcula la ruta Casa → sitios del día (en orden) → Casa. Solo se
   facturan los tramos que salen de IE/EAE o llegan a IE/EAE
 
 ### 4. Reportes
-- Genera el resumen mensual
+- Resumen mensual del año elegido
 - Exporta a CSV para Hacienda
 
 ---
@@ -72,13 +74,15 @@ Se buscan en el título, la descripción y la ubicación del evento (sin
 distinguir mayúsculas ni acentos). La lista completa está en `LOCATION_KEYWORDS`
 (`src/trips.js`). Algunos ejemplos:
 
-- **IE Segovia:** segovia
-- **IE Madrid Tower:** tower, ie madrid, caleido, "IE" como palabra suelta, final project review
+- **IE Segovia:** segovia, códigos de grupo de IE con "S" (p. ej. `BBA/SEP-2026/1.S.A`)
+- **IE Madrid Tower:** tower, ie madrid, caleido, "IE" como palabra suelta, final project review, otros códigos de IE (p. ej. `BBA/SEP-2026/OPT.M.A`)
 - **EAE:** eae, joaquin costa, mamgc
 - **UFV:** ufv, villanueva
 - **CEU:** ceu, san pablo
-- **SLU:** slu, saint louis
+- **SLU:** slu, saint louis, btm, padre rubio
 - **UC3M:** uc3m, getafe, tutoria
+
+Las sesiones asíncronas (`ASYNC_...`) son online y no cuentan como viaje.
 
 ---
 

@@ -1,4 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import {
+  LOCATION_NAMES, BILLABLE_LOCATIONS, detectLocation, isSuspectUnmapped,
+  parseEventDate, eventKey, isDeclined, buildTrips, buildMonthlyReports
+} from './trips.js';
 
 // ============================================
 // CONFIGURACIÓN - EDITA ESTOS VALORES
@@ -11,63 +15,8 @@ const CONFIG = {
   RATE_PER_KM: 0.26,
   
   // Año por defecto
-  DEFAULT_YEAR: 2025
+  DEFAULT_YEAR: new Date().getFullYear()
 };
-
-// ============================================
-// DISTANCIAS ENTRE UBICACIONES (km)
-// ============================================
-const DISTANCES = {
-  'casa': { 'ie_segovia': 95, 'ie_madrid_tower': 12, 'eae_joaquin_costa': 8, 'ufv': 25, 'ceu': 18, 'slu': 15, 'uc3m': 22, 'casa': 0 },
-  'ie_segovia': { 'casa': 95, 'ie_madrid_tower': 90, 'eae_joaquin_costa': 92, 'ufv': 85, 'ceu': 88, 'slu': 90, 'uc3m': 95, 'ie_segovia': 0 },
-  'ie_madrid_tower': { 'casa': 12, 'ie_segovia': 90, 'eae_joaquin_costa': 5, 'ufv': 20, 'ceu': 15, 'slu': 12, 'uc3m': 18, 'ie_madrid_tower': 0 },
-  'eae_joaquin_costa': { 'casa': 8, 'ie_segovia': 92, 'ie_madrid_tower': 5, 'ufv': 22, 'ceu': 14, 'slu': 10, 'uc3m': 16, 'eae_joaquin_costa': 0 },
-  'ufv': { 'casa': 25, 'ie_segovia': 85, 'ie_madrid_tower': 20, 'eae_joaquin_costa': 22, 'ceu': 12, 'slu': 18, 'uc3m': 30, 'ufv': 0 },
-  'ceu': { 'casa': 18, 'ie_segovia': 88, 'ie_madrid_tower': 15, 'eae_joaquin_costa': 14, 'ufv': 12, 'slu': 8, 'uc3m': 25, 'ceu': 0 },
-  'slu': { 'casa': 15, 'ie_segovia': 90, 'ie_madrid_tower': 12, 'eae_joaquin_costa': 10, 'ufv': 18, 'ceu': 8, 'uc3m': 20, 'slu': 0 },
-  'uc3m': { 'casa': 22, 'ie_segovia': 95, 'ie_madrid_tower': 18, 'eae_joaquin_costa': 16, 'ufv': 30, 'ceu': 25, 'slu': 20, 'uc3m': 0 }
-};
-
-const LOCATION_NAMES = {
-  'casa': 'Casa (Monasterio de Silos 38)',
-  'ie_segovia': 'IE Segovia',
-  'ie_madrid_tower': 'IE Madrid Tower',
-  'eae_joaquin_costa': 'EAE Joaquín Costa',
-  'ufv': 'UFV',
-  'ceu': 'CEU',
-  'slu': 'SLU',
-  'uc3m': 'UC3M (Getafe)'
-};
-
-// IMPORTANTE: el orden importa. Las claves más específicas deben ir antes
-// que las genéricas (p.ej. ie_segovia antes de ie_madrid_tower) para que
-// "IE Segovia Business School" no caiga en Madrid Tower.
-const LOCATION_KEYWORDS = {
-  'ie_segovia': ['segovia', 'ie segovia', 'campus segovia'],
-  'ie_madrid_tower': [
-    'tower', 'ie madrid', 'ie tower', 'madrid tower',
-    'data_driven', 'data driven', 'caleido', 'torre caleido',
-    // Genérico IE (cualquier sesión IE que no sea Segovia)
-    'ie business school', 'ie business', 'ie university',
-    'instituto de empresa', 'ie school',
-  ],
-  'eae_joaquin_costa': [
-    'eae', 'joaquin costa', 'mamgc',
-    'master en marketing', 'marketing y gestion', 'ft-es-a',
-    'eae business school', 'eae business', 'eae madrid',
-  ],
-  'ufv': ['ufv', 'villanueva', 'francisco vitoria', 'aib', 'aib1', 'ciencia de datos', 'fundamentos de ciencia', 'big data'],
-  'ceu': ['ceu', 'san pablo'],
-  'slu': ['slu', 'saint louis', 'san luis', 'btm', 'btm?2500', 'btm 2500'],
-  'uc3m': ['uc3m', 'uc3', 'getafe', 'carlos iii', 'tutoria']
-};
-
-// Normalizar texto: minúsculas + sin acentos
-const normalize = (s) => (s || '').toString().toLowerCase()
-  .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-
-// Ubicaciones facturables (solo IE y EAE)
-const BILLABLE_LOCATIONS = ['ie_segovia', 'ie_madrid_tower', 'eae_joaquin_costa'];
 
 const MONTHS = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 
@@ -85,90 +34,112 @@ const SAMPLE_INVOICES = [
   { month: 10, year: 2025, totalLiters: 401.42, baseAmount: 453.64, taxAmount: 95.26, totalAmount: 548.90, invoiceNumber: 'FRA/2025277716' }
 ];
 
+// Lee un array guardado en localStorage, reconvirtiendo la fecha indicada
+const loadStored = (key, dateField) => {
+  try {
+    const items = JSON.parse(localStorage.getItem(key) || '[]');
+    return dateField ? items.map(it => ({ ...it, [dateField]: new Date(it[dateField]) })) : items;
+  } catch {
+    return [];
+  }
+};
+
+const shortName = (loc) => loc === 'casa' ? 'Casa' : LOCATION_NAMES[loc];
+
+// URL de redirección OAuth: raíz de la app en GitHub Pages (base de Vite),
+// aunque se haya abierto como .../index.html
+const getRedirectUri = () => window.location.origin + import.meta.env.BASE_URL;
+
 export default function App() {
-  const [invoices, setInvoices] = useState([]);
-  const [calendarEvents, setCalendarEvents] = useState([]);
-  const [trips, setTrips] = useState([]);
-  const [monthlyReports, setMonthlyReports] = useState([]);
+  const [invoices, setInvoices] = useState(() => loadStored('travel_invoices'));
+  const [calendarEvents, setCalendarEvents] = useState(() => loadStored('travel_events', 'start'));
+  const [trips, setTrips] = useState(() => loadStored('travel_trips', 'date'));
   const [selectedMonth, setSelectedMonth] = useState(null);
-  const [selectedYear, setSelectedYear] = useState(CONFIG.DEFAULT_YEAR);
+  const [selectedYear, setSelectedYear] = useState(() => Number(localStorage.getItem('travel_year')) || CONFIG.DEFAULT_YEAR);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [accessToken, setAccessToken] = useState(null);
   const [activeTab, setActiveTab] = useState('facturas');
   const [isLoading, setIsLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
-  const [manualEvents, setManualEvents] = useState([]);
-  const [showManualEntry, setShowManualEntry] = useState(false);
-
-  // Detecta la ubicación buscando keywords en título, descripción y location
-  // del evento. Normaliza acentos para que "joaquín"/"joaquin" sean equivalentes.
-  const detectLocation = useCallback((event) => {
-    if (!event) return null;
-    const haystack = [event.summary, event.description, event.location, event.title]
-      .map(normalize)
-      .filter(Boolean)
-      .join(' \n ');
-    if (!haystack) return null;
-    for (const [locationKey, keywords] of Object.entries(LOCATION_KEYWORDS)) {
-      for (const keyword of keywords) {
-        if (haystack.includes(normalize(keyword))) return locationKey;
-      }
+  const [manualEvents, setManualEvents] = useState(() => loadStored('travel_manual', 'start'));
+  const [missedEvents, setMissedEvents] = useState(() => loadStored('travel_review', 'start'));
+  // Sitio elegido a mano por evento (clave eventKey → ubicación o 'none')
+  const [locationOverrides, setLocationOverrides] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('travel_overrides') || '{}');
+    } catch {
+      return {};
     }
-    return null;
-  }, []);
+  });
+  const [showManualEntry, setShowManualEntry] = useState(false);
 
   // Cargar token de URL al iniciar (OAuth redirect)
   useEffect(() => {
     const hash = window.location.hash;
-    if (hash.includes('access_token')) {
+    if (hash.includes('access_token') || hash.includes('error=')) {
       const params = new URLSearchParams(hash.substring(1));
       const token = params.get('access_token');
       if (token) {
         setAccessToken(token);
         setIsAuthenticated(true);
         setStatusMessage('✅ Conectado con Google Calendar');
-        window.history.replaceState(null, '', window.location.pathname);
+      } else {
+        setStatusMessage(`❌ Google no autorizó el acceso: ${params.get('error')}`);
       }
+      window.history.replaceState(null, '', window.location.pathname);
     }
-    
-    const savedInvoices = localStorage.getItem('travel_invoices');
-    const savedTrips = localStorage.getItem('travel_trips');
-    const savedEvents = localStorage.getItem('travel_events');
-    const savedManual = localStorage.getItem('travel_manual');
-    
-    if (savedInvoices) setInvoices(JSON.parse(savedInvoices));
-    if (savedTrips) setTrips(JSON.parse(savedTrips).map(t => ({...t, date: new Date(t.date)})));
-    if (savedEvents) setCalendarEvents(JSON.parse(savedEvents).map(e => ({...e, start: new Date(e.start)})));
-    if (savedManual) setManualEvents(JSON.parse(savedManual).map(e => ({...e, start: new Date(e.start)})));
   }, []);
 
+  // Se guarda siempre (también vacío) para que borrar el último elemento persista
   useEffect(() => {
-    if (invoices.length > 0) localStorage.setItem('travel_invoices', JSON.stringify(invoices));
+    localStorage.setItem('travel_invoices', JSON.stringify(invoices));
   }, [invoices]);
 
   useEffect(() => {
-    if (trips.length > 0) localStorage.setItem('travel_trips', JSON.stringify(trips));
+    localStorage.setItem('travel_trips', JSON.stringify(trips));
   }, [trips]);
 
   useEffect(() => {
-    if (calendarEvents.length > 0) localStorage.setItem('travel_events', JSON.stringify(calendarEvents));
+    localStorage.setItem('travel_events', JSON.stringify(calendarEvents));
   }, [calendarEvents]);
 
   useEffect(() => {
-    if (manualEvents.length > 0) localStorage.setItem('travel_manual', JSON.stringify(manualEvents));
+    localStorage.setItem('travel_manual', JSON.stringify(manualEvents));
   }, [manualEvents]);
+
+  useEffect(() => {
+    localStorage.setItem('travel_review', JSON.stringify(missedEvents));
+  }, [missedEvents]);
+
+  useEffect(() => {
+    localStorage.setItem('travel_overrides', JSON.stringify(locationOverrides));
+  }, [locationOverrides]);
+
+  useEffect(() => {
+    localStorage.setItem('travel_year', String(selectedYear));
+  }, [selectedYear]);
+
+  const yearEvents = useMemo(
+    () => calendarEvents.filter(e => new Date(e.start).getFullYear() === selectedYear),
+    [calendarEvents, selectedYear]
+  );
+  const yearReview = useMemo(
+    () => missedEvents
+      .filter(e => new Date(e.start).getFullYear() === selectedYear)
+      .sort((a, b) => new Date(a.start) - new Date(b.start)),
+    [missedEvents, selectedYear]
+  );
+  const yearTrips = useMemo(() => trips.filter(t => t.year === selectedYear), [trips, selectedYear]);
+  const visibleTrips = selectedMonth !== null ? yearTrips.filter(t => t.month === selectedMonth) : yearTrips;
+  const monthlyReports = useMemo(
+    () => buildMonthlyReports(yearTrips, invoices.filter(i => i.year === selectedYear)),
+    [yearTrips, invoices, selectedYear]
+  );
 
   const loadSampleData = useCallback(() => {
     setInvoices(SAMPLE_INVOICES);
     setStatusMessage('✅ Facturas de Ballenoil 2025 cargadas');
   }, []);
-
-  // Obtener URL de redirección para GitHub Pages
-  const getRedirectUri = () => {
-    const url = window.location.origin + window.location.pathname;
-    // Quitar trailing slash si existe y añadir uno limpio
-    return url.endsWith('/') ? url.slice(0, -1) + '/' : url + '/';
-  };
 
   const handleGoogleAuth = useCallback(() => {
     const redirectUri = getRedirectUri();
@@ -196,16 +167,28 @@ export default function App() {
     const endDate = new Date(selectedYear, 11, 31, 23, 59, 59);
     const authHeader = { Authorization: `Bearer ${accessToken}` };
 
+    // GET paginado; devuelve { items } o { error }
+    const fetchAllPages = async (url, baseParams = {}) => {
+      const items = [];
+      let pageToken;
+      do {
+        const params = new URLSearchParams(baseParams);
+        if (pageToken) params.set('pageToken', pageToken);
+        const resp = await fetch(`${url}?${params.toString()}`, { headers: authHeader });
+        const data = await resp.json();
+        if (data.error) return { items, error: data.error };
+        if (data.items) items.push(...data.items);
+        pageToken = data.nextPageToken;
+      } while (pageToken);
+      return { items };
+    };
+
     try {
       // 1) Listar todos los calendarios del usuario (no solo "primary")
-      const calListResp = await fetch(
-        'https://www.googleapis.com/calendar/v3/users/me/calendarList',
-        { headers: authHeader }
-      );
-      const calListData = await calListResp.json();
-      if (calListData.error) {
-        setStatusMessage(`❌ Error: ${calListData.error.message}`);
-        if (calListData.error.code === 401) {
+      const calList = await fetchAllPages('https://www.googleapis.com/calendar/v3/users/me/calendarList');
+      if (calList.error) {
+        setStatusMessage(`❌ Error: ${calList.error.message}`);
+        if (calList.error.code === 401) {
           setIsAuthenticated(false);
           setAccessToken(null);
         }
@@ -213,84 +196,74 @@ export default function App() {
         return;
       }
 
-      const calendars = (calListData.items || []).filter(c => !c.hidden);
+      const calendars = calList.items.filter(c => !c.hidden);
 
       // 2) Pedir eventos de cada calendario en paralelo, paginando
-      const fetchAllPages = async (calendarId) => {
-        const out = [];
-        let pageToken;
-        do {
-          const params = new URLSearchParams({
+      const results = await Promise.all(calendars.map(async (cal) => {
+        const { items, error } = await fetchAllPages(
+          `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.id)}/events`,
+          {
             timeMin: startDate.toISOString(),
             timeMax: endDate.toISOString(),
             singleEvents: 'true',
             orderBy: 'startTime',
             maxResults: '2500',
-          });
-          if (pageToken) params.set('pageToken', pageToken);
-          const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params.toString()}`;
-          const resp = await fetch(url, { headers: authHeader });
-          const data = await resp.json();
-          if (data.error) {
-            console.warn(`Calendario ${calendarId}: ${data.error.message}`);
-            return out;
           }
-          if (data.items) out.push(...data.items);
-          pageToken = data.nextPageToken;
-        } while (pageToken);
-        return out;
-      };
-
-      const results = await Promise.all(
-        calendars.map(c => fetchAllPages(c.id).then(items => ({ cal: c, items })))
-      );
+        );
+        if (error) console.warn(`Calendario ${cal.summary}: ${error.message}`);
+        return { cal, items, error };
+      }));
+      const failed = results.filter(r => r.error).map(r => r.cal.summary);
 
       // 3) Consolidar y deduplicar (evento puede aparecer en varios calendarios)
       const seen = new Set();
       const allRaw = [];
       for (const { cal, items } of results) {
         for (const ev of items) {
-          const key = ev.iCalUID || ev.id;
+          if (!ev.start || isDeclined(ev)) continue;
+          const key = eventKey(ev);
           if (seen.has(key)) continue;
           seen.add(key);
           allRaw.push({ ...ev, _calendarName: cal.summary });
         }
       }
 
-      if (allRaw.length === 0) {
-        setStatusMessage(`⚠️ No se encontraron eventos en ${selectedYear}`);
-        setIsLoading(false);
-        return;
-      }
-
-      // 4) Detectar ubicación con título + descripción + location
-      const allEvents = allRaw.map(event => ({
-        id: event.id,
-        title: event.summary || 'Sin título',
-        description: event.description || '',
-        start: new Date(event.start.dateTime || event.start.date),
-        location: detectLocation(event),
-        originalLocation: event.location,
-        calendar: event._calendarName,
-      }));
+      // 4) Detectar ubicación con título + descripción + location;
+      //    si el usuario la eligió a mano, manda su elección
+      const allEvents = allRaw.map(event => {
+        const key = eventKey(event);
+        const autoLocation = detectLocation(event);
+        const override = locationOverrides[key];
+        return {
+          id: event.id,
+          key,
+          title: event.summary || 'Sin título',
+          description: event.description || '',
+          start: parseEventDate(event.start.dateTime || event.start.date),
+          location: override === 'none' ? null : (override || autoLocation),
+          autoLocation,
+          originalLocation: event.location,
+          calendar: event._calendarName,
+        };
+      }).filter(e => e.start.getFullYear() === selectedYear);
 
       const relevantEvents = allEvents.filter(e => e.location !== null);
 
-      // 5) Diagnóstico: eventos que mencionan IE/EAE/business pero no se han mapeado
-      const suspectRe = /\b(ie|eae|business school|instituto de empresa)\b/;
-      const missed = allEvents.filter(e => {
-        if (e.location) return false;
-        const text = normalize(`${e.title} ${e.description} ${e.originalLocation || ''}`);
-        return suspectRe.test(text);
-      });
+      // 5) Para revisar: mencionan IE/EAE/business pero no se detectan solos
+      const missed = allEvents.filter(e => isSuspectUnmapped({ ...e, location: e.autoLocation }));
+      const pending = missed.filter(e => !locationOverrides[e.key]);
 
-      setCalendarEvents(relevantEvents);
+      // Reemplazar solo los eventos del año importado; los de otros años se conservan
+      const otherYears = (e) => new Date(e.start).getFullYear() !== selectedYear;
+      setCalendarEvents(prev => [...prev.filter(otherYears), ...relevantEvents]);
+      setMissedEvents(prev => [...prev.filter(otherYears), ...missed]);
 
-      let msg = `✅ ${relevantEvents.length} eventos relevantes de ${allEvents.length} totales (${calendars.length} calendarios)`;
-      if (missed.length > 0) {
-        const sample = missed.slice(0, 3).map(e => `"${e.title}"`).join(', ');
-        msg += ` · ⚠️ ${missed.length} posibles IE/EAE no mapeados: ${sample}`;
-        console.warn('Eventos sospechosos no mapeados:', missed);
+      const billable = relevantEvents.filter(e => BILLABLE_LOCATIONS.includes(e.location)).length;
+      let msg = `✅ ${relevantEvents.length} eventos relevantes (${billable} de IE/EAE) de ${allEvents.length} totales en ${selectedYear} (${calendars.length} calendarios)`;
+      if (failed.length > 0) msg += ` · ❌ No se pudo leer: ${failed.join(', ')}`;
+      if (pending.length > 0) {
+        msg += ` · ⚠️ ${pending.length} posibles IE/EAE sin asignar (revisa la lista)`;
+        console.warn('Eventos sospechosos no mapeados:', pending);
       }
       setStatusMessage(msg);
     } catch (error) {
@@ -298,7 +271,25 @@ export default function App() {
     }
 
     setIsLoading(false);
-  }, [accessToken, selectedYear, detectLocation]);
+  }, [accessToken, selectedYear, locationOverrides]);
+
+  // Asignar a mano el sitio de un evento de la lista de revisión.
+  // value: ubicación, 'none' (no es un viaje) o '' (volver a sin asignar)
+  const assignLocation = useCallback((event, value) => {
+    setLocationOverrides(prev => {
+      const next = { ...prev };
+      if (value) next[event.key] = value;
+      else delete next[event.key];
+      return next;
+    });
+    setCalendarEvents(prev => {
+      const rest = prev.filter(e => e.key !== event.key);
+      return value && value !== 'none' ? [...rest, { ...event, location: value }] : rest;
+    });
+    setStatusMessage(value && value !== 'none'
+      ? `✅ "${event.title}" → ${LOCATION_NAMES[value]}. Pulsa "Calcular" en Viajes para actualizar`
+      : `✅ "${event.title}" no cuenta como viaje`);
+  }, []);
 
   const addManualEvent = useCallback((event) => {
     event.preventDefault();
@@ -306,7 +297,7 @@ export default function App() {
     const newEvent = {
       id: `manual_${Date.now()}`,
       title: formData.get('title'),
-      start: new Date(formData.get('date')),
+      start: parseEventDate(formData.get('date')),
       location: formData.get('destination'),
       isManual: true
     };
@@ -322,124 +313,24 @@ export default function App() {
   }, []);
 
   const calculateTrips = useCallback(() => {
-    const allEvents = [...calendarEvents, ...manualEvents].sort((a, b) => 
-      new Date(a.start) - new Date(b.start)
-    );
+    const allEvents = [...calendarEvents, ...manualEvents];
     
     if (allEvents.length === 0) {
       setStatusMessage('⚠️ No hay eventos para calcular viajes');
       return [];
     }
     
-    const calculatedTrips = [];
-    let previousLocation = 'casa';
-    let previousDate = null;
-
-    for (let i = 0; i < allEvents.length; i++) {
-      const event = allEvents[i];
-      const destination = event.location;
-      if (!destination) continue;
-      
-      const eventDate = new Date(event.start);
-      const dateStr = eventDate.toDateString();
-      
-      // Determinar origen: si es el mismo día, desde ubicación anterior; si no, desde casa
-      let origin = 'casa';
-      if (previousDate && previousDate.toDateString() === dateStr) {
-        origin = previousLocation;
-      }
-      
-      // Solo crear viaje facturable si el destino es IE o EAE
-      const isBillable = BILLABLE_LOCATIONS.includes(destination);
-      
-      if (isBillable) {
-        const distanceToDestination = DISTANCES[origin]?.[destination] || 0;
-        
-        calculatedTrips.push({
-          id: `${event.id}-ida`,
-          date: eventDate,
-          month: eventDate.getMonth(),
-          year: eventDate.getFullYear(),
-          origin,
-          destination,
-          distance: distanceToDestination,
-          type: 'ida',
-          event: event.title,
-          amount: distanceToDestination * CONFIG.RATE_PER_KM,
-          billable: true
-        });
-      }
-
-      const nextEvent = allEvents[i + 1];
-      const hasMoreEventsToday = nextEvent && new Date(nextEvent.start).toDateString() === dateStr;
-      
-      if (!hasMoreEventsToday) {
-        // Vuelta a casa - solo facturable si venimos de IE o EAE
-        if (isBillable) {
-          const distanceBack = DISTANCES[destination]?.['casa'] || 0;
-          calculatedTrips.push({
-            id: `${event.id}-vuelta`,
-            date: eventDate,
-            month: eventDate.getMonth(),
-            year: eventDate.getFullYear(),
-            origin: destination,
-            destination: 'casa',
-            distance: distanceBack,
-            type: 'vuelta',
-            event: event.title,
-            amount: distanceBack * CONFIG.RATE_PER_KM,
-            billable: true
-          });
-        }
-        previousLocation = 'casa';
-      } else {
-        // Hay más eventos hoy, actualizar ubicación anterior
-        previousLocation = destination;
-      }
-      
-      previousDate = eventDate;
-    }
-    
+    const calculatedTrips = buildTrips(allEvents, CONFIG.RATE_PER_KM);
     setTrips(calculatedTrips);
-    setStatusMessage(`✅ ${calculatedTrips.length} viajes facturables (IE/EAE) calculados`);
+    const inYear = calculatedTrips.filter(t => t.year === selectedYear).length;
+    setStatusMessage(`✅ ${inYear} viajes facturables (IE/EAE) calculados en ${selectedYear}`);
     return calculatedTrips;
-  }, [calendarEvents, manualEvents]);
+  }, [calendarEvents, manualEvents, selectedYear]);
 
+  // Los reportes se derivan de los viajes del año; generar = recalcular viajes
   const generateMonthlyReports = useCallback(() => {
-    const calculatedTrips = calculateTrips();
-    if (calculatedTrips.length === 0) return;
-    
-    const reports = {};
-
-    for (const trip of calculatedTrips) {
-      const key = `${trip.year}-${trip.month}`;
-      if (!reports[key]) {
-        reports[key] = { month: trip.month, year: trip.year, trips: [], totalKm: 0, totalAmount: 0, fuelExpense: 0, fuelLiters: 0 };
-      }
-      reports[key].trips.push(trip);
-      reports[key].totalKm += trip.distance;
-      reports[key].totalAmount += trip.amount;
-    }
-
-    for (const invoice of invoices) {
-      const key = `${invoice.year}-${invoice.month}`;
-      if (reports[key]) {
-        reports[key].fuelExpense += invoice.totalAmount;
-        reports[key].fuelLiters += invoice.totalLiters;
-      }
-    }
-
-    for (const key of Object.keys(reports)) {
-      const report = reports[key];
-      if (report.totalKm > 0 && report.fuelLiters > 0) {
-        report.consumptionPer100km = (report.fuelLiters / report.totalKm) * 100;
-        report.costPerKm = report.fuelExpense / report.totalKm;
-      }
-    }
-
-    setMonthlyReports(Object.values(reports).sort((a, b) => a.year !== b.year ? a.year - b.year : a.month - b.month));
-    setStatusMessage(`✅ Reportes generados`);
-  }, [calculateTrips, invoices]);
+    if (calculateTrips().length > 0) setStatusMessage(`✅ Reportes de ${selectedYear} generados`);
+  }, [calculateTrips, selectedYear]);
 
   const exportToCSV = useCallback(() => {
     if (monthlyReports.length === 0) return;
@@ -466,13 +357,12 @@ export default function App() {
   }, [monthlyReports, selectedYear]);
 
   const exportTripsToCSV = useCallback(() => {
-    if (trips.length === 0) return;
+    if (visibleTrips.length === 0) return;
     
     let csv = 'Fecha,Evento,Origen,Destino,Tipo,Kilómetros,Importe (€)\n';
-    const filteredTrips = selectedMonth !== null ? trips.filter(t => t.month === selectedMonth) : trips;
     
-    for (const trip of filteredTrips) {
-      csv += `${new Date(trip.date).toLocaleDateString('es-ES')},"${trip.event}",${LOCATION_NAMES[trip.origin]},${LOCATION_NAMES[trip.destination]},${trip.type},${trip.distance},${trip.amount.toFixed(2)}\n`;
+    for (const trip of visibleTrips) {
+      csv += `${new Date(trip.date).toLocaleDateString('es-ES')},"${(trip.event || '').replace(/"/g, '""')}",${LOCATION_NAMES[trip.origin]},${LOCATION_NAMES[trip.destination]},${trip.type},${trip.distance},${trip.amount.toFixed(2)}\n`;
     }
     
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -481,15 +371,16 @@ export default function App() {
     link.download = `detalle_viajes_${selectedYear}${selectedMonth !== null ? '_' + MONTHS[selectedMonth] : ''}.csv`;
     link.click();
     setStatusMessage('✅ Detalle exportado');
-  }, [trips, selectedMonth, selectedYear]);
+  }, [visibleTrips, selectedMonth, selectedYear]);
 
   const clearAllData = useCallback(() => {
     if (confirm('¿Seguro que quieres borrar todos los datos?')) {
       setInvoices([]);
       setCalendarEvents([]);
       setTrips([]);
-      setMonthlyReports([]);
       setManualEvents([]);
+      setMissedEvents([]);
+      setLocationOverrides({});
       localStorage.clear();
       setStatusMessage('🗑️ Datos borrados');
     }
@@ -508,13 +399,18 @@ export default function App() {
               </div>
             </div>
             
-            <nav className="flex gap-1 bg-slate-800 p-1 rounded-xl">
-              {[['facturas', '📁'], ['calendario', '📅'], ['viajes', '🛣️'], ['reportes', '📊']].map(([key, icon]) => (
-                <button key={key} onClick={() => setActiveTab(key)} className={`px-3 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === key ? 'bg-cyan-500 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}>
-                  {icon}
-                </button>
-              ))}
-            </nav>
+            <div className="flex gap-2 items-center">
+              <select value={selectedYear} onChange={(e) => setSelectedYear(parseInt(e.target.value))} title="Año" className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm">
+                {Array.from({ length: CONFIG.DEFAULT_YEAR - 2024 + 2 }, (_, i) => 2024 + i).map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+              <nav className="flex gap-1 bg-slate-800 p-1 rounded-xl">
+                {[['facturas', '📁'], ['calendario', '📅'], ['viajes', '🛣️'], ['reportes', '📊']].map(([key, icon]) => (
+                  <button key={key} onClick={() => setActiveTab(key)} className={`px-3 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === key ? 'bg-cyan-500 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}>
+                    {icon}
+                  </button>
+                ))}
+              </nav>
+            </div>
           </div>
           
           {statusMessage && (
@@ -589,12 +485,6 @@ export default function App() {
           <div className="space-y-6">
             <h2 className="text-xl font-bold">📅 Google Calendar</h2>
 
-            <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4">
-              <p className="font-semibold text-amber-400 mb-2">⚙️ Configuración OAuth</p>
-              <p className="text-sm text-slate-300 mb-2">Añade esta URL en Google Cloud Console → Credenciales → tu cliente OAuth → URIs de redirección:</p>
-              <code className="block bg-slate-800 px-3 py-2 rounded text-cyan-400 text-sm break-all">{getRedirectUri()}</code>
-            </div>
-
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
               {!isAuthenticated ? (
                 <div className="text-center py-6">
@@ -604,50 +494,79 @@ export default function App() {
                   <button onClick={handleGoogleAuth} className="px-6 py-3 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-xl font-medium hover:shadow-lg transition-all">
                     🔗 Conectar con Google
                   </button>
+                  <details className="mt-6 text-left bg-slate-800/60 rounded-xl p-4 text-sm">
+                    <summary className="cursor-pointer text-slate-400">¿Google muestra "redirect_uri_mismatch"? (configuración única)</summary>
+                    <p className="text-slate-300 mt-2 mb-2">No es un error de la app: es un aviso para configurar Google una sola vez. En Google Cloud Console → Credenciales → tu cliente OAuth → URIs de redirección autorizados, añade exactamente:</p>
+                    <code className="block bg-slate-900 px-3 py-2 rounded text-cyan-400 break-all">{getRedirectUri()}</code>
+                  </details>
                 </div>
               ) : (
-                <div>
-                  <div className="flex justify-between items-center mb-4 flex-wrap gap-3">
-                    <p className="text-emerald-400 font-medium">✅ Conectado</p>
-                    <div className="flex gap-2 items-center">
-                      <select value={selectedYear} onChange={(e) => setSelectedYear(parseInt(e.target.value))} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2">
-                        <option value={2024}>2024</option>
-                        <option value={2025}>2025</option>
-                        <option value={2026}>2026</option>
-                      </select>
-                      <button onClick={fetchCalendarEvents} disabled={isLoading} className="px-4 py-2 bg-cyan-500 rounded-xl font-medium hover:bg-cyan-600 disabled:opacity-50">
-                        {isLoading ? '⏳...' : `📥 Importar ${selectedYear}`}
-                      </button>
-                    </div>
-                  </div>
+                <div className="flex justify-between items-center mb-4 flex-wrap gap-3">
+                  <p className="text-emerald-400 font-medium">✅ Conectado</p>
+                  <button onClick={fetchCalendarEvents} disabled={isLoading} className="px-4 py-2 bg-cyan-500 rounded-xl font-medium hover:bg-cyan-600 disabled:opacity-50">
+                    {isLoading ? '⏳...' : `📥 Importar ${selectedYear}`}
+                  </button>
+                </div>
+              )}
 
-                  {calendarEvents.length > 0 && (
-                    <div className="overflow-x-auto">
-                      <p className="text-emerald-400 mb-2 text-sm">✓ {calendarEvents.length} eventos</p>
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="text-left text-slate-400 border-b border-slate-800">
-                            <th className="pb-2">Fecha</th>
-                            <th className="pb-2">Evento</th>
-                            <th className="pb-2">Destino</th>
+              {yearEvents.length > 0 && (
+                <div className="overflow-x-auto mt-2">
+                  <p className="text-emerald-400 mb-2 text-sm">✓ {yearEvents.length} eventos guardados de {selectedYear} ({yearEvents.filter(e => BILLABLE_LOCATIONS.includes(e.location)).length} de IE/EAE)</p>
+                  <div className="max-h-96 overflow-y-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-slate-400 border-b border-slate-800">
+                          <th className="pb-2">Fecha</th>
+                          <th className="pb-2">Evento</th>
+                          <th className="pb-2">Destino</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[...yearEvents].sort((a, b) => new Date(a.start) - new Date(b.start)).map((event) => (
+                          <tr key={`${event.id}-${new Date(event.start).getTime()}`} className="border-b border-slate-800/50">
+                            <td className="py-2 font-mono text-xs">{new Date(event.start).toLocaleDateString('es-ES')}</td>
+                            <td className="py-2">{event.title}</td>
+                            <td className="py-2">
+                              <span className={`px-2 py-1 rounded text-xs ${BILLABLE_LOCATIONS.includes(event.location) ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-700 text-slate-400'}`}>{LOCATION_NAMES[event.location]}</span>
+                              {event.key && locationOverrides[event.key] && <span className="ml-1 text-xs text-slate-500" title="Asignado a mano">✋</span>}
+                            </td>
                           </tr>
-                        </thead>
-                        <tbody>
-                          {calendarEvents.slice(0, 15).map((event) => (
-                            <tr key={event.id} className="border-b border-slate-800/50">
-                              <td className="py-2 font-mono text-xs">{new Date(event.start).toLocaleDateString('es-ES')}</td>
-                              <td className="py-2">{event.title}</td>
-                              <td className="py-2"><span className="px-2 py-1 bg-cyan-500/20 text-cyan-400 rounded text-xs">{LOCATION_NAMES[event.location]}</span></td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      {calendarEvents.length > 15 && <p className="text-center text-slate-400 py-2 text-sm">... y {calendarEvents.length - 15} más</p>}
-                    </div>
-                  )}
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
             </div>
+
+            {yearReview.length > 0 && (
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-6">
+                <h3 className="font-semibold text-amber-400 mb-1">
+                  ⚠️ {yearReview.length} eventos para revisar ({yearReview.filter(e => !locationOverrides[e.key]).length} sin asignar)
+                </h3>
+                <p className="text-sm text-slate-300 mb-3">Parecen de IE/EAE pero no se detectan solos. Elige el sitio de cada uno o "No es un viaje": se recuerda para las próximas importaciones. Después pulsa "Calcular" en Viajes.</p>
+                <div className="space-y-2 max-h-96 overflow-y-auto text-sm">
+                  {yearReview.map((event) => {
+                    const value = locationOverrides[event.key] || '';
+                    return (
+                      <div key={event.key} className="flex items-center gap-3 flex-wrap">
+                        <span className="font-mono text-xs text-slate-400 w-20">{new Date(event.start).toLocaleDateString('es-ES')}</span>
+                        <span className="flex-1 min-w-[10rem]">{event.title}</span>
+                        <select
+                          value={value}
+                          onChange={(e) => assignLocation(event, e.target.value)}
+                          className={`bg-slate-800 border rounded-lg px-2 py-1 text-xs ${value ? 'border-slate-700' : 'border-amber-500/60 text-amber-300'}`}
+                        >
+                          <option value="">— Sin asignar —</option>
+                          {Object.entries(LOCATION_NAMES).filter(([k]) => k !== 'casa').map(([k, n]) => <option key={k} value={k}>{n}</option>)}
+                          <option value="none">No es un viaje</option>
+                        </select>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Viajes manuales */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
@@ -688,20 +607,20 @@ export default function App() {
                   <option value="">Todos</option>
                   {MONTHS.map((m, i) => <option key={i} value={i}>{m}</option>)}
                 </select>
-                {trips.length > 0 && <button onClick={exportTripsToCSV} className="px-4 py-2 bg-emerald-500 rounded-xl font-medium">📥 CSV</button>}
+                {visibleTrips.length > 0 && <button onClick={exportTripsToCSV} className="px-4 py-2 bg-emerald-500 rounded-xl font-medium">📥 CSV</button>}
               </div>
             </div>
 
-            {trips.length === 0 ? (
+            {yearTrips.length === 0 ? (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center">
                 <div className="text-5xl mb-4">🛣️</div>
-                <p className="text-slate-400">Importa eventos y haz clic en "Calcular"</p>
+                <p className="text-slate-400">Sin viajes en {selectedYear}. Importa eventos y haz clic en "Calcular"</p>
               </div>
             ) : (
               <>
                 <div className="grid grid-cols-3 gap-4">
                   {(() => {
-                    const f = selectedMonth !== null ? trips.filter(t => t.month === selectedMonth) : trips;
+                    const f = visibleTrips;
                     return (
                       <>
                         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
@@ -721,7 +640,7 @@ export default function App() {
                   })()}
                 </div>
 
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 overflow-x-auto">
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 overflow-x-auto max-h-[32rem] overflow-y-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-left text-slate-400 border-b border-slate-800">
@@ -733,12 +652,12 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {(selectedMonth !== null ? trips.filter(t => t.month === selectedMonth) : trips).slice(0, 50).map((trip) => (
+                      {visibleTrips.map((trip) => (
                         <tr key={trip.id} className="border-b border-slate-800/50">
                           <td className="py-2 font-mono text-xs">{new Date(trip.date).toLocaleDateString('es-ES')}</td>
                           <td className="py-2 text-xs">{trip.event?.substring(0, 25)}</td>
                           <td className="py-2 text-xs">
-                            {LOCATION_NAMES[trip.origin]?.split(' ')[0]} → {LOCATION_NAMES[trip.destination]?.split(' ')[0]}
+                            {shortName(trip.origin)} → {shortName(trip.destination)}
                             <span className={`ml-2 px-1 rounded text-xs ${trip.type === 'ida' ? 'bg-blue-500/20 text-blue-400' : 'bg-amber-500/20 text-amber-400'}`}>{trip.type}</span>
                           </td>
                           <td className="py-2 font-mono">{trip.distance}</td>
@@ -757,7 +676,7 @@ export default function App() {
         {activeTab === 'reportes' && (
           <div className="space-y-6">
             <div className="flex justify-between items-center flex-wrap gap-3">
-              <h2 className="text-xl font-bold">📊 Reportes</h2>
+              <h2 className="text-xl font-bold">📊 Reportes {selectedYear}</h2>
               <div className="flex gap-2">
                 <button onClick={generateMonthlyReports} className="px-4 py-2 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-xl font-medium">📊 Generar</button>
                 {monthlyReports.length > 0 && <button onClick={exportToCSV} className="px-4 py-2 bg-emerald-500 rounded-xl font-medium">📥 CSV</button>}
@@ -768,7 +687,7 @@ export default function App() {
             {monthlyReports.length === 0 ? (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center">
                 <div className="text-5xl mb-4">📊</div>
-                <p className="text-slate-400">Carga facturas, importa eventos y genera reportes</p>
+                <p className="text-slate-400">Sin viajes en {selectedYear}. Carga facturas, importa eventos y genera reportes</p>
               </div>
             ) : (
               <>

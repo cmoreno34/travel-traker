@@ -4,6 +4,7 @@ import {
   parseEventDate, eventKey, isDeclined, buildTrips, buildMonthlyReports,
   titleKey, applyRules, pendingGroups
 } from './trips.js';
+import { MONTHS, tripsSheet, reportSheet, downloadExcel } from './excel.js';
 
 // ============================================
 // CONFIGURACIÓN - EDITA ESTOS VALORES
@@ -18,8 +19,6 @@ const CONFIG = {
   // Año por defecto
   DEFAULT_YEAR: new Date().getFullYear()
 };
-
-const MONTHS = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 
 const SAMPLE_INVOICES = [
   { month: 0, year: 2025, totalLiters: 169.69, baseAmount: 188.64, taxAmount: 39.61, totalAmount: 228.25, invoiceNumber: 'FRA/2025012212' },
@@ -321,45 +320,25 @@ export default function App() {
     setStatusMessage('🗑️ Viaje eliminado');
   }, []);
 
-  const exportToCSV = useCallback(() => {
+  // Excel con el resumen mensual y el detalle de viajes del año
+  const exportReportToExcel = useCallback(async () => {
     if (monthlyReports.length === 0) return;
-    
-    let csv = 'Mes,Año,Km Totales,Importe Km (€),Gasto Combustible (€),Litros,Consumo L/100km,Coste Real €/km\n';
-    
-    for (const report of monthlyReports) {
-      csv += `${MONTHS[report.month]},${report.year},${report.totalKm},${report.totalAmount.toFixed(2)},${report.fuelExpense.toFixed(2)},${report.fuelLiters.toFixed(2)},${(report.consumptionPer100km || 0).toFixed(2)},${(report.costPerKm || 0).toFixed(3)}\n`;
+    try {
+      await downloadExcel([reportSheet(monthlyReports, selectedYear), tripsSheet(yearTrips)], `viajes_profesionales_${selectedYear}.xlsx`);
+      setStatusMessage('✅ Excel exportado');
+    } catch (error) {
+      setStatusMessage(`❌ No se pudo exportar: ${error.message}`);
     }
-    
-    const totals = monthlyReports.reduce((acc, r) => ({
-      km: acc.km + r.totalKm, amount: acc.amount + r.totalAmount, fuel: acc.fuel + r.fuelExpense, liters: acc.liters + r.fuelLiters
-    }), { km: 0, amount: 0, fuel: 0, liters: 0 });
-    
-    csv += `\nTOTAL,${selectedYear},${totals.km},${totals.amount.toFixed(2)},${totals.fuel.toFixed(2)},${totals.liters.toFixed(2)},,\n`;
-    csv += `\nDiferencia (Importe - Combustible):,${(totals.amount - totals.fuel).toFixed(2)}€\n`;
-    
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `viajes_profesionales_${selectedYear}.csv`;
-    link.click();
-    setStatusMessage('✅ CSV exportado');
-  }, [monthlyReports, selectedYear]);
+  }, [monthlyReports, yearTrips, selectedYear]);
 
-  const exportTripsToCSV = useCallback(() => {
+  const exportTripsToExcel = useCallback(async () => {
     if (visibleTrips.length === 0) return;
-    
-    let csv = 'Fecha,Evento,Origen,Destino,Tipo,Kilómetros,Importe (€)\n';
-    
-    for (const trip of visibleTrips) {
-      csv += `${new Date(trip.date).toLocaleDateString('es-ES')},"${(trip.event || '').replace(/"/g, '""')}",${LOCATION_NAMES[trip.origin]},${LOCATION_NAMES[trip.destination]},${trip.type},${trip.distance},${trip.amount.toFixed(2)}\n`;
+    try {
+      await downloadExcel([tripsSheet(visibleTrips)], `detalle_viajes_${selectedYear}${selectedMonth !== null ? '_' + MONTHS[selectedMonth] : ''}.xlsx`);
+      setStatusMessage('✅ Excel exportado');
+    } catch (error) {
+      setStatusMessage(`❌ No se pudo exportar: ${error.message}`);
     }
-    
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `detalle_viajes_${selectedYear}${selectedMonth !== null ? '_' + MONTHS[selectedMonth] : ''}.csv`;
-    link.click();
-    setStatusMessage('✅ Detalle exportado');
   }, [visibleTrips, selectedMonth, selectedYear]);
 
   const clearAllData = useCallback(() => {
@@ -635,7 +614,7 @@ export default function App() {
                   <option value="">Todos</option>
                   {MONTHS.map((m, i) => <option key={i} value={i}>{m}</option>)}
                 </select>
-                {visibleTrips.length > 0 && <button onClick={exportTripsToCSV} className="px-4 py-2 bg-emerald-500 rounded-xl font-medium">📥 CSV</button>}
+                {visibleTrips.length > 0 && <button onClick={exportTripsToExcel} className="px-4 py-2 bg-emerald-500 rounded-xl font-medium">📥 Excel</button>}
               </div>
             </div>
 
@@ -706,7 +685,7 @@ export default function App() {
             <div className="flex justify-between items-center flex-wrap gap-3">
               <h2 className="text-xl font-bold">📊 Reportes {selectedYear}</h2>
               <div className="flex gap-2">
-                {monthlyReports.length > 0 && <button onClick={exportToCSV} className="px-4 py-2 bg-emerald-500 rounded-xl font-medium">📥 CSV</button>}
+                {monthlyReports.length > 0 && <button onClick={exportReportToExcel} className="px-4 py-2 bg-emerald-500 rounded-xl font-medium">📥 Excel</button>}
                 <button onClick={clearAllData} className="px-4 py-2 bg-red-500/20 text-red-400 border border-red-500/30 rounded-xl font-medium">🗑️</button>
               </div>
             </div>
@@ -778,7 +757,7 @@ export default function App() {
 
                 <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4">
                   <p className="font-semibold text-emerald-400 mb-1">📋 Para Hacienda</p>
-                  <p className="text-sm text-slate-300">Exporta el CSV con el detalle de viajes coordinado con tu Google Calendar.</p>
+                  <p className="text-sm text-slate-300">Exporta el Excel: incluye el resumen mensual y el detalle de cada viaje, coordinado con tu Google Calendar.</p>
                 </div>
               </>
             )}

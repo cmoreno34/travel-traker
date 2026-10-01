@@ -51,7 +51,8 @@ Haz clic en "Cargar Ballenoil 2025" para importar tus 11 facturas.
 
 ### 4. Reportes
 - Resumen mensual del año elegido
-- Exporta a CSV para Hacienda
+- Exporta a Excel (.xlsx) para Hacienda: resumen mensual y detalle de viajes.
+  En 🛣️ Viajes también se puede exportar el detalle del mes elegido
 
 ---
 

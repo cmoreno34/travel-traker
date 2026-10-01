@@ -36,7 +36,10 @@ Haz clic en "Cargar Ballenoil 2025" para importar tus 11 facturas.
 - Haz clic en "Conectar con Google" y autoriza el acceso
 - Importa los eventos del año (se leen todos tus calendarios). Importar un año
   no borra los eventos ya guardados de otros años
-- Revisa la lista de eventos detectados y el aviso de "posibles IE/EAE no asignados"
+- Revisa la lista de eventos detectados. Los que parecen de IE/EAE pero no se
+  detectan solos aparecen en "Eventos para revisar": elige su sitio en el
+  desplegable (o "No es un viaje"). La elección se recuerda en las próximas
+  importaciones y se marca con ✋ en la tabla
 
 ### 3. Viajes
 - Haz clic en "Calcular" para generar los viajes

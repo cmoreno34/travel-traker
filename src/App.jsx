@@ -62,7 +62,15 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [manualEvents, setManualEvents] = useState(() => loadStored('travel_manual', 'start'));
-  const [missedEvents, setMissedEvents] = useState([]);
+  const [missedEvents, setMissedEvents] = useState(() => loadStored('travel_review', 'start'));
+  // Sitio elegido a mano por evento (clave eventKey → ubicación o 'none')
+  const [locationOverrides, setLocationOverrides] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('travel_overrides') || '{}');
+    } catch {
+      return {};
+    }
+  });
   const [showManualEntry, setShowManualEntry] = useState(false);
 
   // Cargar token de URL al iniciar (OAuth redirect)
@@ -100,12 +108,26 @@ export default function App() {
   }, [manualEvents]);
 
   useEffect(() => {
+    localStorage.setItem('travel_review', JSON.stringify(missedEvents));
+  }, [missedEvents]);
+
+  useEffect(() => {
+    localStorage.setItem('travel_overrides', JSON.stringify(locationOverrides));
+  }, [locationOverrides]);
+
+  useEffect(() => {
     localStorage.setItem('travel_year', String(selectedYear));
   }, [selectedYear]);
 
   const yearEvents = useMemo(
     () => calendarEvents.filter(e => new Date(e.start).getFullYear() === selectedYear),
     [calendarEvents, selectedYear]
+  );
+  const yearReview = useMemo(
+    () => missedEvents
+      .filter(e => new Date(e.start).getFullYear() === selectedYear)
+      .sort((a, b) => new Date(a.start) - new Date(b.start)),
+    [missedEvents, selectedYear]
   );
   const yearTrips = useMemo(() => trips.filter(t => t.year === selectedYear), [trips, selectedYear]);
   const visibleTrips = selectedMonth !== null ? yearTrips.filter(t => t.month === selectedMonth) : yearTrips;
@@ -206,35 +228,42 @@ export default function App() {
         }
       }
 
-      // 4) Detectar ubicación con título + descripción + location
-      const allEvents = allRaw.map(event => ({
-        id: event.id,
-        title: event.summary || 'Sin título',
-        description: event.description || '',
-        start: parseEventDate(event.start.dateTime || event.start.date),
-        location: detectLocation(event),
-        originalLocation: event.location,
-        calendar: event._calendarName,
-      })).filter(e => e.start.getFullYear() === selectedYear);
+      // 4) Detectar ubicación con título + descripción + location;
+      //    si el usuario la eligió a mano, manda su elección
+      const allEvents = allRaw.map(event => {
+        const key = eventKey(event);
+        const autoLocation = detectLocation(event);
+        const override = locationOverrides[key];
+        return {
+          id: event.id,
+          key,
+          title: event.summary || 'Sin título',
+          description: event.description || '',
+          start: parseEventDate(event.start.dateTime || event.start.date),
+          location: override === 'none' ? null : (override || autoLocation),
+          autoLocation,
+          originalLocation: event.location,
+          calendar: event._calendarName,
+        };
+      }).filter(e => e.start.getFullYear() === selectedYear);
 
       const relevantEvents = allEvents.filter(e => e.location !== null);
 
-      // 5) Diagnóstico: eventos que mencionan IE/EAE/business pero no se han mapeado
-      const missed = allEvents.filter(isSuspectUnmapped);
+      // 5) Para revisar: mencionan IE/EAE/business pero no se detectan solos
+      const missed = allEvents.filter(e => isSuspectUnmapped({ ...e, location: e.autoLocation }));
+      const pending = missed.filter(e => !locationOverrides[e.key]);
 
       // Reemplazar solo los eventos del año importado; los de otros años se conservan
-      setCalendarEvents(prev => [
-        ...prev.filter(e => new Date(e.start).getFullYear() !== selectedYear),
-        ...relevantEvents,
-      ]);
-      setMissedEvents(missed);
+      const otherYears = (e) => new Date(e.start).getFullYear() !== selectedYear;
+      setCalendarEvents(prev => [...prev.filter(otherYears), ...relevantEvents]);
+      setMissedEvents(prev => [...prev.filter(otherYears), ...missed]);
 
       const billable = relevantEvents.filter(e => BILLABLE_LOCATIONS.includes(e.location)).length;
       let msg = `✅ ${relevantEvents.length} eventos relevantes (${billable} de IE/EAE) de ${allEvents.length} totales en ${selectedYear} (${calendars.length} calendarios)`;
       if (failed.length > 0) msg += ` · ❌ No se pudo leer: ${failed.join(', ')}`;
-      if (missed.length > 0) {
-        msg += ` · ⚠️ ${missed.length} posibles IE/EAE no mapeados (revisa la lista)`;
-        console.warn('Eventos sospechosos no mapeados:', missed);
+      if (pending.length > 0) {
+        msg += ` · ⚠️ ${pending.length} posibles IE/EAE sin asignar (revisa la lista)`;
+        console.warn('Eventos sospechosos no mapeados:', pending);
       }
       setStatusMessage(msg);
     } catch (error) {
@@ -242,7 +271,25 @@ export default function App() {
     }
 
     setIsLoading(false);
-  }, [accessToken, selectedYear]);
+  }, [accessToken, selectedYear, locationOverrides]);
+
+  // Asignar a mano el sitio de un evento de la lista de revisión.
+  // value: ubicación, 'none' (no es un viaje) o '' (volver a sin asignar)
+  const assignLocation = useCallback((event, value) => {
+    setLocationOverrides(prev => {
+      const next = { ...prev };
+      if (value) next[event.key] = value;
+      else delete next[event.key];
+      return next;
+    });
+    setCalendarEvents(prev => {
+      const rest = prev.filter(e => e.key !== event.key);
+      return value && value !== 'none' ? [...rest, { ...event, location: value }] : rest;
+    });
+    setStatusMessage(value && value !== 'none'
+      ? `✅ "${event.title}" → ${LOCATION_NAMES[value]}. Pulsa "Calcular" en Viajes para actualizar`
+      : `✅ "${event.title}" no cuenta como viaje`);
+  }, []);
 
   const addManualEvent = useCallback((event) => {
     event.preventDefault();
@@ -333,6 +380,7 @@ export default function App() {
       setTrips([]);
       setManualEvents([]);
       setMissedEvents([]);
+      setLocationOverrides({});
       localStorage.clear();
       setStatusMessage('🗑️ Datos borrados');
     }
@@ -478,7 +526,10 @@ export default function App() {
                           <tr key={`${event.id}-${new Date(event.start).getTime()}`} className="border-b border-slate-800/50">
                             <td className="py-2 font-mono text-xs">{new Date(event.start).toLocaleDateString('es-ES')}</td>
                             <td className="py-2">{event.title}</td>
-                            <td className="py-2"><span className={`px-2 py-1 rounded text-xs ${BILLABLE_LOCATIONS.includes(event.location) ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-700 text-slate-400'}`}>{LOCATION_NAMES[event.location]}</span></td>
+                            <td className="py-2">
+                              <span className={`px-2 py-1 rounded text-xs ${BILLABLE_LOCATIONS.includes(event.location) ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-700 text-slate-400'}`}>{LOCATION_NAMES[event.location]}</span>
+                              {event.key && locationOverrides[event.key] && <span className="ml-1 text-xs text-slate-500" title="Asignado a mano">✋</span>}
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -488,17 +539,31 @@ export default function App() {
               )}
             </div>
 
-            {missedEvents.length > 0 && (
+            {yearReview.length > 0 && (
               <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-6">
-                <h3 className="font-semibold text-amber-400 mb-1">⚠️ {missedEvents.length} eventos que parecen de IE/EAE pero no se han podido asignar</h3>
-                <p className="text-sm text-slate-300 mb-3">No cuentan como viaje. Añádelos como viaje manual o incluye el sitio (p. ej. "Tower", "Segovia", "Joaquín Costa") en el título del evento.</p>
-                <div className="space-y-1 max-h-60 overflow-y-auto text-sm">
-                  {missedEvents.map((event) => (
-                    <div key={`${event.id}-${new Date(event.start).getTime()}`} className="flex gap-3">
-                      <span className="font-mono text-xs text-slate-400 pt-0.5">{new Date(event.start).toLocaleDateString('es-ES')}</span>
-                      <span>{event.title}</span>
-                    </div>
-                  ))}
+                <h3 className="font-semibold text-amber-400 mb-1">
+                  ⚠️ {yearReview.length} eventos para revisar ({yearReview.filter(e => !locationOverrides[e.key]).length} sin asignar)
+                </h3>
+                <p className="text-sm text-slate-300 mb-3">Parecen de IE/EAE pero no se detectan solos. Elige el sitio de cada uno o "No es un viaje": se recuerda para las próximas importaciones. Después pulsa "Calcular" en Viajes.</p>
+                <div className="space-y-2 max-h-96 overflow-y-auto text-sm">
+                  {yearReview.map((event) => {
+                    const value = locationOverrides[event.key] || '';
+                    return (
+                      <div key={event.key} className="flex items-center gap-3 flex-wrap">
+                        <span className="font-mono text-xs text-slate-400 w-20">{new Date(event.start).toLocaleDateString('es-ES')}</span>
+                        <span className="flex-1 min-w-[10rem]">{event.title}</span>
+                        <select
+                          value={value}
+                          onChange={(e) => assignLocation(event, e.target.value)}
+                          className={`bg-slate-800 border rounded-lg px-2 py-1 text-xs ${value ? 'border-slate-700' : 'border-amber-500/60 text-amber-300'}`}
+                        >
+                          <option value="">— Sin asignar —</option>
+                          {Object.entries(LOCATION_NAMES).filter(([k]) => k !== 'casa').map(([k, n]) => <option key={k} value={k}>{n}</option>)}
+                          <option value="none">No es un viaje</option>
+                        </select>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}

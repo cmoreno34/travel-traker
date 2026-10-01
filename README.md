@@ -2,60 +2,27 @@
 
 Aplicación para gestionar viajes profesionales, conectar con Google Calendar y generar reportes para Hacienda.
 
-**URL de la app:** https://cmoreno34.github.io/travel-tracker/
+**URL de la app:** https://cmoreno34.github.io/travel-traker/
 
 ---
 
-## 🚀 Despliegue en GitHub Pages
+## 🚀 Despliegue
 
-### Paso 1: Crear repositorio en GitHub
-
-1. Ve a [github.com/new](https://github.com/new)
-2. Nombre del repositorio: `travel-tracker`
-3. Marca "Public"
-4. Haz clic en "Create repository"
-
-### Paso 2: Subir el código
-
-Abre una terminal en la carpeta del proyecto y ejecuta:
-
-```bash
-git init
-git add .
-git commit -m "Initial commit"
-git branch -M main
-git remote add origin https://github.com/cmoreno34/travel-tracker.git
-git push -u origin main
-```
-
-### Paso 3: Instalar dependencias y desplegar
-
-```bash
-npm install
-npm run deploy
-```
-
-### Paso 4: Activar GitHub Pages
-
-1. Ve a tu repositorio en GitHub
-2. Settings → Pages
-3. Source: "Deploy from a branch"
-4. Branch: `gh-pages` / `/ (root)`
-5. Save
-
-Tu app estará en: https://cmoreno34.github.io/travel-tracker/
+Cada push a `main` publica la app automáticamente en GitHub Pages
+(`.github/workflows/pages.yml`). En Settings → Pages, "Source" debe ser **GitHub Actions**.
 
 ---
 
-## 🔧 Google Cloud - URI de redirección
+## 🔧 Google Cloud - URI de redirección (solo una vez)
 
-Añade esta URI en Google Cloud Console → Credenciales → tu cliente OAuth:
+Añade esta URI en Google Cloud Console → Credenciales → tu cliente OAuth → URIs de redirección autorizados:
 
 ```
-https://cmoreno34.github.io/travel-tracker/
+https://cmoreno34.github.io/travel-traker/
 ```
 
-⚠️ **Importante:** Incluye la barra final `/`
+⚠️ **Importante:** es `travel-traker` (como el repositorio) e incluye la barra final `/`.
+Si falta, Google muestra el error `redirect_uri_mismatch` al conectar.
 
 ---
 
@@ -65,13 +32,17 @@ https://cmoreno34.github.io/travel-tracker/
 Haz clic en "Cargar Ballenoil 2025" para importar tus 11 facturas.
 
 ### 2. Calendario
-- Haz clic en "Conectar con Google"
-- Autoriza el acceso
-- Importa los eventos del año
+- Elige el año arriba a la derecha
+- Haz clic en "Conectar con Google" y autoriza el acceso
+- Importa los eventos del año (se leen todos tus calendarios). Importar un año
+  no borra los eventos ya guardados de otros años
+- Revisa la lista de eventos detectados y el aviso de "posibles IE/EAE no asignados"
 
 ### 3. Viajes
 - Haz clic en "Calcular" para generar los viajes
 - Filtra por mes si lo necesitas
+- Cada día se calcula la ruta Casa → sitios del día (en orden) → Casa. Solo se
+  facturan los tramos que salen de IE/EAE o llegan a IE/EAE
 
 ### 4. Reportes
 - Genera el resumen mensual
@@ -94,14 +65,17 @@ Haz clic en "Cargar Ballenoil 2025" para importar tus 11 facturas.
 
 ## 🔑 Palabras Clave para Detección
 
-Los eventos se detectan buscando estas palabras en el título:
+Se buscan en el título, la descripción y la ubicación del evento (sin
+distinguir mayúsculas ni acentos). La lista completa está en `LOCATION_KEYWORDS`
+(`src/trips.js`). Algunos ejemplos:
 
 - **IE Segovia:** segovia
-- **IE Madrid Tower:** tower, ie madrid
-- **EAE:** eae, joaquin costa
+- **IE Madrid Tower:** tower, ie madrid, caleido, "IE" como palabra suelta
+- **EAE:** eae, joaquin costa, mamgc
 - **UFV:** ufv, villanueva
 - **CEU:** ceu, san pablo
 - **SLU:** slu, saint louis
+- **UC3M:** uc3m, getafe, tutoria
 
 ---
 
@@ -118,11 +92,11 @@ npm install
 npm run dev
 ```
 
-Abre http://localhost:5173
+Abre http://localhost:5173/travel-traker/
 
 Para desarrollo local, añade también esta URI en Google Cloud:
 ```
-http://localhost:5173/
+http://localhost:5173/travel-traker/
 ```
 
 ---
@@ -131,4 +105,4 @@ http://localhost:5173/
 
 Configurada a **0,26 €/km** (estándar Hacienda).
 
-Para cambiarla, edita `src/App.jsx` línea 10.
+Para cambiarla, edita `RATE_PER_KM` en `src/App.jsx`.

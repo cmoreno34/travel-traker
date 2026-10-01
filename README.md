@@ -70,7 +70,7 @@ distinguir mayúsculas ni acentos). La lista completa está en `LOCATION_KEYWORD
 (`src/trips.js`). Algunos ejemplos:
 
 - **IE Segovia:** segovia
-- **IE Madrid Tower:** tower, ie madrid, caleido, "IE" como palabra suelta
+- **IE Madrid Tower:** tower, ie madrid, caleido, "IE" como palabra suelta, final project review
 - **EAE:** eae, joaquin costa, mamgc
 - **UFV:** ufv, villanueva
 - **CEU:** ceu, san pablo

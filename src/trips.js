@@ -37,6 +37,8 @@ export const LOCATION_KEYWORDS = {
     'ie business school', 'ie business', 'ie university',
     'instituto de empresa', 'ie school',
     /\bie\b/,
+    // Revisiones de proyecto final y alumnos de IE
+    'final project review', 'ana rull', 'rull orti',
   ],
   'eae_joaquin_costa': [
     'eae', 'joaquin costa', 'mamgc',
@@ -82,11 +84,12 @@ export const detectLocation = (event) => {
   return null;
 };
 
-// Eventos que mencionan IE/EAE/business school pero no se han mapeado
+// Eventos que mencionan IE/EAE/business school pero no se han mapeado.
+// Aquí sí se miran los enlaces (p.ej. ie.zoom.us): es solo una lista para revisar.
 const SUSPECT_RE = /\b(ie|eae|business school|instituto de empresa)\b/;
 export const isSuspectUnmapped = (event) => {
   if (event.location) return false;
-  return SUSPECT_RE.test(toSearchText(`${event.title} ${event.description} ${event.originalLocation || ''}`));
+  return SUSPECT_RE.test(normalize(`${event.title} ${event.description} ${event.originalLocation || ''}`));
 };
 
 // "2025-03-10" (eventos de día completo / alta manual) se interpreta en hora
